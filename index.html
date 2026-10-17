@@ -357,7 +357,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v379'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v380'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -2798,6 +2798,7 @@ function startNetHit(d){ // spectator only -- the actual state-transition half o
  // same as the batter's own screen). Clearing it immediately here was forcing the bat into the same abrupt cutoff a check-swing uses mid-motion
  // -- a path the bat's blending was never built to look good from -- which read exactly like "it stops at the check swing".
  stopPitchAudio();
+ if(d.snd)playHitSound(d.snd,d.ev); // v380: the bat-crack sound the batting side already chose and sent -- see playHitSound()'s own comment for why this can't be re-derived locally
  H={p:new THREE.Vector3(d.p.x,d.p.y,d.p.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),w:new THREE.Vector3(d.w.x,d.w.y,d.w.z),launch:0,spray:0,ev:d.ev,roll:false,t:0,y0:d.y0,fenceBounced:false,wallBounced:false,treePass:false,obSound:false};
  contacted=true;trk.length=0;trailPts.length=0;path.length=0;
  first=null;maxD=0;crossed=null;peak=0;fairDec=null;
@@ -3103,11 +3104,15 @@ function tryContact(t){
  // clock too (see applyNetPitchStart/applyNetSwing), so this lets it cut to ball-flight at the exact same relative instant the bat reaches the
  // ball on the batter's screen, instead of whenever this network message happens to land (see applyNetContact()'s own comment for the bug this
  // caused -- bat and ball visibly out of sync at the moment of contact).
- if(onlineActive&&iAmBatting())netSend('contact',{tau,p:{x:H.p.x,y:H.p.y,z:H.p.z},v:{x:H.v.x,y:H.v.y,z:H.v.z},w:{x:H.w.x,y:H.w.y,z:H.w.z},y0:H.y0,ev:H.ev});
  const vh=vo3.clone().normalize(),RPM=60/(2*Math.PI),back=(wv.x*(-vh.z)+wv.z*vh.x)*RPM,side=wv.y*RPM;
  swingInfo.c={roll:rho,dyaw:dyawDeg,dyawDisp,back,side,r,dy:off.y,sweet,ev,la,spray,tau,dist,mph:vb.length()*2.237,aa:Math.atan2(vb.y,Math.hypot(vb.x,vb.z))/D2R,ad:Math.atan2(-vb.x,-vb.z)/D2R,
   dyawStatic,dyawDyn,mastery,masteryDisp,vBx:vB.x,vBy:vB.y,vBz:vB.z,ptName:P.t.n,ptAx:P.t.ax||0,popped:weakOppoPop,excellence}; // added for diagnosing the Early/Late wording and whether a breaking pitch's own lateral velocity is skewing spin on contact -- see showDbg() (was `t`, which isn't in scope in this function -- P.t is the live pitch) // popped: the early-outside roll flipped to the lazy-popup-to-oppo variant instead of the usual rollover // vBy/tau/excellence added for issue #3: on paper-identical outside/late/near-sweet-spot contact, launch angle sometimes comes out lofted (good) and sometimes flat (topped-feeling) with nothing in the existing diagnostics explaining the gap -- vB.y is the ball's own incoming vertical speed (more negative the longer gravity's had it, i.e. the later real contact happens) which may be swamping the swing's own attack angle before the loft bonus (excellence/LOFT) ever gets a chance to apply
  swingInfo.c.snd=playHit(swingInfo.c);
+ // v380: netSend('contact',...) now goes out AFTER playHit() picks (and plays) the bat-crack sound above, and carries that exact sound name --
+ // the spectator's side (startNetHit(), below) has no local swingInfo/r/mastery to re-derive which of SOUNDS.hitRules would have matched, so without
+ // this it just never played a hit sound at all (the reported bug: contact is otherwise fully synced/replayed, but was always silent for whoever
+ // wasn't the one batting). Sending the already-chosen name instead of re-deriving it also guarantees both sides hear the identical clip.
+ if(onlineActive&&iAmBatting())netSend('contact',{tau,p:{x:H.p.x,y:H.p.y,z:H.p.z},v:{x:H.v.x,y:H.v.y,z:H.v.z},w:{x:H.w.x,y:H.w.y,z:H.w.z},y0:H.y0,ev:H.ev,snd:swingInfo.c.snd});
 }
 // ---- results ----
 const CONTINUE_HINT=' — B / Right-click / Alt for next pitch'; // the dedicated continue input (continuePress()), never load/swing -- see press()/continuePress()
@@ -3408,7 +3413,11 @@ function playPitchAudio(){if(!actx||!P)return;stopPitchAudio();const T=P.T-(perf
   s.connect(g);g.connect(actx.destination);s.start(t0+st);s.stop(t0+Math.min(T+.02,st+fb.duration/rate));sfxFlight={s,g}}
  const sb=P.inZ?SFX[P.sp>=C.HARD?SOUNDS.strikeHard:SOUNDS.strikeSoft]:null; // strike only if it reaches the panel; hard fastball above C.HARD m/s
  if(sb){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=sb;g.gain.value=.9;s.connect(g);g.connect(actx.destination);s.start(t0+Math.max(0,T));sfxStrike={s,g}}}
-function playHit(c){if(!actx)return null;const rule=SOUNDS.hitRules.find(x=>x.when(c)),nm=rule&&(Array.isArray(rule.sound)?rule.sound[Math.random()*rule.sound.length|0]:rule.sound),b=nm&&SFX[nm];if(!b)return null;const s=actx.createBufferSource(),g=actx.createGain();s.buffer=b;s.playbackRate.value=.97+Math.random()*.06;g.gain.value=Math.min(1,.5+.5*c.ev/30);s.connect(g);g.connect(actx.destination);s.start();return nm}
+function playHitSound(nm,ev){ // v380: split out of playHit() below so the spectator side (startNetHit()) can play the EXACT clip the batting side
+ // already chose and sent over the network, without needing swingInfo/r/mastery/etc to re-derive which SOUNDS.hitRules entry would have matched --
+ // it never has that data, which is exactly why the hit sound was previously silent on whichever side wasn't actually swinging.
+ if(!actx)return;const b=nm&&SFX[nm];if(!b)return;const s=actx.createBufferSource(),g=actx.createGain();s.buffer=b;s.playbackRate.value=.97+Math.random()*.06;g.gain.value=Math.min(1,.5+.5*ev/30);s.connect(g);g.connect(actx.destination);s.start()}
+function playHit(c){if(!actx)return null;const rule=SOUNDS.hitRules.find(x=>x.when(c)),nm=rule&&(Array.isArray(rule.sound)?rule.sound[Math.random()*rule.sound.length|0]:rule.sound),b=nm&&SFX[nm];if(!b)return null;playHitSound(nm,c.ev);return nm}
 function playFenceHit(vr){if(!actx)return;const t=actx.currentTime; // synthesized plastic-ball-off-wood knock, v231: swapped the pure-tone "thock" oscillator for a few detuned bandpassed-noise body resonances (reads as hollow wood rather than a synth beep), and scaled overall volume by the ball's impact speed (vr) so a slow end-of-roll bump against the fence is much quieter than a full-speed shot
  const vol=Math.min(1,Math.max(.12,(vr||10)/18));
  const clk=noiseBuf(.035,false),cs=actx.createBufferSource(),cf=actx.createBiquadFilter(),cg=actx.createGain();cs.buffer=clk;cf.type='bandpass';cf.frequency.value=1500;cf.Q.value=.9;cg.gain.setValueAtTime(.06*vol,t);cg.gain.exponentialRampToValueAtTime(.001,t+.03);cs.connect(cf);cf.connect(cg);cg.connect(actx.destination);cs.start();cs.stop(t+.035);
