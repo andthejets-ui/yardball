@@ -247,8 +247,13 @@ exactly the "floats up to the top-left" bug. */
  timing has a real visual target instead of an invisible internal number. v366: now a quick rise-then-fall bounce (see PITCH_METER_RISE/FALL and
  pitchMeterVal()) instead of a one-way fill that just caps once held past the target -- full width IS the sweet spot, same as before, but now the
  bar recedes again right after if you don't let go, so there's a real, visible moment rather than an invisible window past a frozen-full bar. */
-#poLoadMeter{display:none;position:relative;width:160px;height:10px;margin:8px auto 0;background:#0008;border-radius:5px;overflow:hidden}
-#poLoadMeter.show{display:block}
+/* v385: always laid out now (display:block, not display:none-until-loading) -- it used to only get inserted into the flex column once
+ pitchAimLoading went true, which (now that touch keeps it ABOVE #poAimZone, see .meterAboveAim above) shoved the zone/dot down by the meter's
+ own height the instant you started pressing, right as you were lining up your thumb. Reserving its space from the first render of the aim phase
+ (before any press at all) means the zone never moves once you actually start aiming. `.show` now only controls a dim-vs-full opacity (an empty,
+ low-contrast track reads as "not currently loading" without needing to disappear/reflow), not whether space for it exists at all. */
+#poLoadMeter{display:block;position:relative;width:160px;height:10px;margin:8px auto 0;background:#0008;border-radius:5px;overflow:hidden;opacity:.4;transition:opacity .15s}
+#poLoadMeter.show{opacity:1}
 #poLoadFill{height:100%;width:0;background:#ffd23f}
 #poLoadFill.peak{background:#5fd36a} /* v366: flashes green near the top of the bounce as a clearer "now!" cue than the bare yellow fill alone */
 /* v382: shrink the pitching widget on short landscape viewports (iPhone 14 at 844x390, iPhone SE at 667x375, etc.) so it comfortably fits without
@@ -380,7 +385,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v384'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v386'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -1385,6 +1390,10 @@ function renderPitcherOverlay(){
    const held=performance.now()/1000-pitchAimLoadStart,frac=pitchMeterVal(held);
    fillEl.style.width=(frac*100)+'%';
    fillEl.classList.toggle('peak',frac>=0.85); // flashes green near the top of the bounce as an extra "now!" cue beyond the bar width alone
+  } else {
+   fillEl.style.width='0%';fillEl.classList.remove('peak'); // v385: the track is always on screen now (see #poLoadMeter's own comment), so reset
+   // it back to empty while idle -- otherwise it'd keep showing whatever width/peak state was left over from the PREVIOUS throw, dimmed but
+   // visibly wrong, instead of reading as a fresh, empty meter for the one about to start.
   }
  }
 }
@@ -1521,7 +1530,16 @@ addEventListener('pointerdown',e=>{
 addEventListener('pointermove',e=>{
  if(e.pointerType!=='touch')return;
  if(pitchTouchDown&&st==='pitchPick'){
-  pitchPickIdx=pitchOctantFromDelta(e.clientX-pitchTouchStartX,e.clientY-pitchTouchStartY);renderPitcherOverlay();
+  // v386: only overwrite pitchPickIdx when the drag has actually moved PAST the deadzone (a real, deliberate rotate) -- it used to overwrite it
+  // unconditionally, including with octantFor()'s own null (under the deadzone), which wiped out whatever cell pointerdown's direct hit-test
+  // (cellIdxAtPoint(), v382) had already correctly selected. A real touchscreen tap is almost never perfectly still between pointerdown and
+  // pointerup -- a few pixels of jitter, or a finger naturally curling/drifting as it lifts off, is completely normal -- so that unconditional
+  // overwrite kept silently cancelling (or redirecting toward whichever direction the release happened to drift) a plain, correctly-tapped pick
+  // the instant a pointermove with a small delta fired, which is exactly the "feels like I need to press above it" symptom reported for a
+  // straight-up tap on Fastball (lift-off drifting slightly down would recompute toward Drop/S unless you pre-compensated by starting the press
+  // a bit higher). Now a deliberate drag still rotates the pick exactly as before -- it just no longer takes a tap's own incidental jitter with it.
+  const idx=pitchOctantFromDelta(e.clientX-pitchTouchStartX,e.clientY-pitchTouchStartY);
+  if(idx!=null){pitchPickIdx=idx;renderPitcherOverlay()}
  } else if(pitchAimTouchDown&&st==='pitchAim'){
   const a=pitchTouchAimFromClient(e.clientX,e.clientY);pitchAimTx=a.tx;pitchAimTy=a.ty;renderPitcherOverlay();
  }
