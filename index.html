@@ -213,7 +213,7 @@ exactly the "floats up to the top-left" bug. */
  pointed to) and given an explicit width now that #poAimZone has a visible strike-zone-within-range to lay out precisely. */
 #pitcherOverlay{position:fixed;right:14%;top:26%;width:190px;z-index:9000;background:#0009;border:1px solid #4a4;border-radius:12px;padding:10px 14px;color:#fff;text-align:center;font:13px/1.3 system-ui,sans-serif;pointer-events:none}
 #poTitle{font-weight:800;color:#7fff7f;margin-bottom:6px;letter-spacing:.05em}
-#poCompass{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,34px);gap:2px}
+#poCompass{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,34px);gap:2px;pointer-events:auto;touch-action:none;cursor:pointer} /* v381: mouse/touch pitch-type pick reads real pointer events off this element -- see the pointer listeners near pollHumanPitch() -- so it needs pointer-events re-enabled, overriding #pitcherOverlay's own pointer-events:none (that none is still exactly right for the rest of the overlay, which stays a pure readout) */
 #poCompass .poDirCell{display:flex;align-items:center;justify-content:center;background:#1b2a1b;border:1px solid #3a5a3a;border-radius:4px;font-size:11px;font-weight:700;padding:2px;text-align:center}
 #poCompass .poDirCell.pick{background:#2c7;color:#002}
 #poCompass .poDirCell.poCenter{background:transparent;border:0}
@@ -222,7 +222,7 @@ exactly the "floats up to the top-left" bug. */
 /* v352: #poAimZone is the FULL range the stick can reach (see AIM_TX_MAX/AIM_TY_MAX) -- #poStrikeZone is a real, to-scale inset of the actual
  strike zone (the same tx/[-0.3,0.3]/ty/[0.25,0.95] bounds startPitch() itself calls a strike, see P.inZ) drawn inside it, so the gap between the
  two IS "well outside the zone" made visible -- the player can see exactly how much stick travel is still "a ball" before throwing. */
-#poAimZone{position:relative;width:160px;height:150px;margin:0 auto;background:#111;border:2px solid #555}
+#poAimZone{position:relative;width:160px;height:150px;margin:0 auto;background:#111;border:2px solid #555;pointer-events:auto;touch-action:none;cursor:pointer} /* v381: mouse/touch aim -- same pointer-events override as #poCompass above, for the same reason */
 /* box edges computed from the real zone (tx in [-0.3,0.3], ty in [0.25,0.95], see startPitch()'s P.inZ) against the SAME AIM_TX_MAX/AIM_TY_MAX
  the dot's own px/py formula in renderPitcherOverlay() uses, so the dashed box and the dot line up exactly -- not independently eyeballed. */
 #poStrikeZone{position:absolute;left:28%;right:28%;top:30%;bottom:18%;border:2px dashed #7fff7f;background:#7fff7f14}
@@ -357,7 +357,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v380'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v381'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -382,6 +382,9 @@ const PITCH_DIR_NAMES=['N','NE','E','SE','S','SW','W','NW'];
 // dot position AND the real strike-zone box (drawn against P.inZ's own tx/ty bounds, see #poStrikeZone CSS) are both computed against the SAME
 // numbers now, so "how far outside the green dashed box the dot can go" on screen actually matches how far outside the zone the pitch can land.
 const AIM_TX_MAX=0.65,AIM_TY_MIN=0,AIM_TY_MAX=1.3;
+function pitchCapable(type){return type==='gamepad'||type==='mouse'||type==='touch'} // v381: human pitching (pick+aim, see pollHumanPitch() and
+ // the mouse/touch pointer listeners right after it) now works for all three -- every eligibility/toggle check that used to read a bare
+ // `type==='gamepad'` check should go through this instead, so loosening it again later (or tightening it) only ever needs to change here.
 // v367: PITCH_ANIM_START/PITCH_ANIM_LEGLIFT/PITCH_ANIM_RELEASE (the live-windup w/C.WIND scale's own clip-time calibration) are gone -- they
 // were only ever read by the live-hold-tied windup math removed from pollHumanPitch()/commitHumanPitch() (see that function's own comment).
 // updateKidPitcher() has always used its own separate, independently-calibrated constants (KIDPITCH_WINDUP_START/RELEASE/etc., see its own
@@ -1340,16 +1343,17 @@ function renderPitcherOverlay(){
  const picking=st==='pitchPick';
  $('poCompass').classList.toggle('hidden',!picking);
  $('poAim').classList.toggle('hidden',picking);
+ const devType=(sideBind[pitchPickSide]||{}).type; // v381: hint text now depends on how this pitcher is actually controlled -- gamepad/mouse/touch each use a different gesture for the same two stages
  if(picking){
   Array.from($('poCompass').children).forEach(c=>{if(c.dataset.idx!==undefined)c.classList.toggle('pick',+c.dataset.idx===pitchPickIdx)});
-  $('poHint').textContent='Flick the stick toward a pitch, then press A to lock it in';
+  $('poHint').textContent=devType==='mouse'?'Move the mouse to aim, click to lock in the pitch':devType==='touch'?'Drag to choose a pitch, release to lock it in':'Flick the stick toward a pitch, then press A to lock it in';
  } else {
   $('poTypeLabel').textContent=pitchPickLockedType?pitchPickLockedType.n:'';
   // v352: dot position now uses the SAME AIM_TX_MAX/AIM_TY_MAX the input is clamped to (was 0.75/1.35, a stale pair that didn't match
   // pollHumanPitch()'s actual ±0.65/[0,1.3] clamp -- the dot used to visibly stop short of the box edges even at full stick deflection).
   const px=50+(pitchAimTx/AIM_TX_MAX)*48,py=100-((pitchAimTy-AIM_TY_MIN)/(AIM_TY_MAX-AIM_TY_MIN))*96;
   $('poAimDot').style.left=px+'%';$('poAimDot').style.top=py+'%';
-  $('poHint').textContent=pitchAimLoading?'Release A to throw -- timing affects your control':'Aim with the stick, hold A to load the pitch';
+  $('poHint').textContent=devType==='mouse'?(pitchAimLoading?'Release to throw -- timing affects your control':'Move the mouse to aim, click and hold to load the pitch'):devType==='touch'?(pitchAimLoading?'Lift your finger to throw -- timing affects your control':'Press where you want to pitch, hold then release to throw'):(pitchAimLoading?'Release A to throw -- timing affects your control':'Aim with the stick, hold A to load the pitch');
   const loadEl=$('poLoadMeter'),fillEl=$('poLoadFill');
   loadEl.classList.toggle('show',pitchAimLoading);
   if(pitchAimLoading){
@@ -1363,7 +1367,14 @@ function renderPitcherOverlay(){
 function pollHumanPitch(){
  if(paused||(st!=='pitchPick'&&st!=='pitchAim'))return; // same convention as press()/release() -- input does nothing while the pause menu is up
  const b=sideBind[pitchPickSide];
- if(!b||b.type!=='gamepad'){cancelHumanPitch();return}
+ if(!b){cancelHumanPitch();return}
+ // v381: this same stuck-input safety net now runs for every device, not just gamepad -- mouse/touch set pitchAimLoading/pitchAimLoadStart
+ // themselves (see the mouse/touch pointer listeners just below this function), so a frozen pointer (e.g. a touch that never reports its own
+ // pointerup/pointercancel) still gets auto-committed instead of leaving the pitcher parked here forever, exactly like a stale gamepad already did.
+ if(st==='pitchAim'&&pitchAimLoading&&performance.now()/1000-pitchAimLoadStart>=PITCH_METER_RISE+PITCH_METER_FALL){
+  commitHumanPitch(PITCH_METER_RISE+PITCH_METER_FALL);return;
+ }
+ if(b.type!=='gamepad')return; // mouse/touch: driven entirely by their own pointer event listeners below, nothing left to poll here every frame
  const g=findPad(b.padId);
  if(!g){cancelHumanPitch();return}
  const ax=g.axes&&g.axes.length>0?g.axes[0]:0,ay=g.axes&&g.axes.length>1?-g.axes[1]:0; // flip Y so pushing up reads as +ay, matching octantFor()'s convention
@@ -1402,6 +1413,80 @@ function pollHumanPitch(){
  }
  pitchAimBtnD=btnDown;renderPitcherOverlay();
 }
+// v381: mouse/touch human pitching -- the same two-stage pick/aim as gamepad above (see the big comment ahead of that section), but event-driven
+// instead of polled, since neither a mouse nor a touch gesture has an analog stick to read every frame. Each device gets its own natural gesture
+// for the SAME two stages, per request: mouse hovers/clicks (pick) and moves-while-held (aim); touch drags relatively (pick) and taps-and-holds
+// directly on the target (aim). Both stages still just write into the exact same pitchPickIdx/pitchPickLockedType/pitchAimTx/pitchAimTy/
+// pitchAimLoading/pitchAimLoadStart state the gamepad path already drives, so renderPitcherOverlay(), commitHumanPitch(), and the stuck-input
+// safety net above all work unchanged regardless of which device actually got them there.
+function pitchDeviceActive(type){ // true only while THIS pitcher (pitchPickSide) is actually claimed by the given device type and mid pick/aim
+ if(st!=='pitchPick'&&st!=='pitchAim')return false;
+ const b=sideBind[pitchPickSide];return !!b&&b.type===type;
+}
+const PITCH_PTR_SCALE=120; // pixels of mouse hover-offset / touch drag that count as a "full" compass deflection -- same role octantFor()'s own 0.5 stick deadzone plays, just in screen pixels instead of a normalized analog axis
+function pitchOctantFromDelta(dx,dy){return octantFor(dx/PITCH_PTR_SCALE,-dy/PITCH_PTR_SCALE)} // reuses octantFor()'s own angle math/deadzone unchanged -- dy is screen-down-positive, flipped here the same way gamepad's own ay already is
+function lockPitchPick(idx){ // shared by the mouse-click and touch-release lock-in paths -- exactly what the gamepad's own A-press branch above
+ // does, minus that branch's btnDown-carryover guard: a mouse click or a touch lift is always a single discrete event, with nothing analogous to
+ // a button still being physically held across the pick->aim transition, so there's no stray state left over to guard against here.
+ pitchPickLockedType=HUMAN_PITCH_TYPES[idx];st='pitchAim';pitchAimTx=0;pitchAimTy=(AIM_TY_MAX+AIM_TY_MIN)/2;pitchAimLoading=false;pitchAimNeedsRelease=false;
+ renderPitcherOverlay();
+}
+const PITCH_MOUSE_AIM_SENS=0.003; // mouse aim tracks RELATIVE movement (movementX/Y), not absolute cursor position, so it works no matter where
+// on screen the cursor physically is -- same reason a shooter's mouselook uses deltas, not raw position. Tuned so a few normal mouse-length flicks
+// cover the full aim range, same rough feel as a stick's own full deflection.
+addEventListener('mousemove',e=>{
+ if(!pitchDeviceActive('mouse'))return;
+ if(st==='pitchPick'){
+  const r=$('poCompass').getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2; // the compass grid's own on-screen center is the reference the hover angle is measured from
+  pitchPickIdx=pitchOctantFromDelta(e.clientX-cx,e.clientY-cy);renderPitcherOverlay();
+ } else {
+  pitchAimTx=Math.max(-AIM_TX_MAX,Math.min(AIM_TX_MAX,pitchAimTx+(e.movementX||0)*PITCH_MOUSE_AIM_SENS));
+  pitchAimTy=Math.max(AIM_TY_MIN,Math.min(AIM_TY_MAX,pitchAimTy-(e.movementY||0)*PITCH_MOUSE_AIM_SENS)); // movementY is screen-down-positive; subtracting makes moving the mouse UP aim higher, same convention the stick already uses
+  renderPitcherOverlay();
+ }
+});
+addEventListener('mousedown',e=>{
+ if(e.button!==0||!pitchDeviceActive('mouse'))return;
+ if(st==='pitchPick'){if(pitchPickIdx!=null)lockPitchPick(pitchPickIdx)}
+ else if(!pitchAimLoading){pitchAimLoading=true;pitchAimLoadStart=performance.now()/1000;renderPitcherOverlay()}
+});
+addEventListener('mouseup',e=>{
+ if(e.button!==0||st!=='pitchAim'||!pitchAimLoading||!pitchDeviceActive('mouse'))return;
+ commitHumanPitch(performance.now()/1000-pitchAimLoadStart);
+});
+let pitchTouchDown=false,pitchTouchStartX=0,pitchTouchStartY=0,pitchAimTouchDown=false; // pick-phase's own drag-reference point is wherever THIS
+// gesture actually started (not a fixed screen spot, since a thumb can start comfortably anywhere) -- aim-phase needs no separate reference point,
+// since it maps directly against #poAimZone's own on-screen box (see pitchTouchAimFromClient() below).
+function pitchTouchAimFromClient(clientX,clientY){ // the exact inverse of renderPitcherOverlay()'s own px/py dot-position formula, so a tap/drag
+ // lands precisely where the dot will then be drawn for that same tx/ty. Extrapolates (then gets clamped to AIM_TX_MAX/AIM_TY_MIN/MAX) past the
+ // box's own edges exactly like the gamepad's "can aim outside the zone" stick deflection already does -- dragging off the small on-screen box
+ // on a phone is still a valid, if extreme, aim, not an error.
+ const r=$('poAimZone').getBoundingClientRect(),relX=(clientX-r.left)/r.width*100,relY=(clientY-r.top)/r.height*100;
+ return{tx:Math.max(-AIM_TX_MAX,Math.min(AIM_TX_MAX,(relX-50)/48*AIM_TX_MAX)),ty:Math.max(AIM_TY_MIN,Math.min(AIM_TY_MAX,AIM_TY_MIN+(100-relY)/96*(AIM_TY_MAX-AIM_TY_MIN)))};
+}
+addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch')return;
+ if(st==='pitchPick'&&pitchDeviceActive('touch')){
+  pitchTouchDown=true;pitchTouchStartX=e.clientX;pitchTouchStartY=e.clientY;pitchPickIdx=null;renderPitcherOverlay();
+ } else if(st==='pitchAim'&&pitchDeviceActive('touch')){
+  pitchAimTouchDown=true;const a=pitchTouchAimFromClient(e.clientX,e.clientY);pitchAimTx=a.tx;pitchAimTy=a.ty;
+  pitchAimLoading=true;pitchAimLoadStart=performance.now()/1000;renderPitcherOverlay();
+ }
+});
+addEventListener('pointermove',e=>{
+ if(e.pointerType!=='touch')return;
+ if(pitchTouchDown&&st==='pitchPick'){
+  pitchPickIdx=pitchOctantFromDelta(e.clientX-pitchTouchStartX,e.clientY-pitchTouchStartY);renderPitcherOverlay();
+ } else if(pitchAimTouchDown&&st==='pitchAim'){
+  const a=pitchTouchAimFromClient(e.clientX,e.clientY);pitchAimTx=a.tx;pitchAimTy=a.ty;renderPitcherOverlay();
+ }
+});
+function pitchTouchRelease(){ // shared by pointerup and pointercancel -- a cancelled gesture should still resolve, same as a normal release,
+ // rather than leaving the pitcher stuck (the stuck-input safety net in pollHumanPitch() above is a backstop for this, not the primary path)
+ if(pitchTouchDown){pitchTouchDown=false;if(st==='pitchPick'&&pitchPickIdx!=null)lockPitchPick(pitchPickIdx)}
+ if(pitchAimTouchDown){pitchAimTouchDown=false;if(st==='pitchAim'&&pitchAimLoading)commitHumanPitch(performance.now()/1000-pitchAimLoadStart)}
+}
+addEventListener('pointerup',pitchTouchRelease);addEventListener('pointercancel',pitchTouchRelease);
 // v368: a first pass at AI batting -- LOCAL/OFFLINE ONLY, for a side that's unclaimed and set to "CPU Controlled" at side-select (see
 // cpuControlled's own declaration). Decides once per pitch whether to swing at all (crude plate discipline: usually swings at a pitch in the
 // zone, rarely chases one outside it) and, if swinging, exactly when to press/release -- reusing the real press()/release() functions with no
@@ -2117,10 +2202,8 @@ let olPickCursor='red'; // which of the two Pick buttons keyboard/gamepad curren
 function pickOnlineSide(side,actor){
  if(sideBind[side]||olPickedSide)return; // already claimed, or some other pick already in flight -- ignore a stray double-press/double-click
  olPickedSide=side;
- hitAndPitch[side]=actor.type==='gamepad'; // v378: default to Hit & Pitch for a controller claim now that human pitching online actually works
- // -- still just a default (flip it back with the arrows/stick before locking in), and only gamepad gets it since that's the only device human
- // pitching reads at all (pollHumanPitch()'s own `b.type!=='gamepad'` gate, and startPitch()'s trigger has the same restriction) -- see
- // setOnlinePitch()/renderOnlinePitchToggle()'s own comments for the other half of this.
+ hitAndPitch[side]=pitchCapable(actor.type); // v378/v381: default to Hit & Pitch for any claim that can actually pitch -- still just a default
+ // (flip it back with the arrows/stick/click before locking in) -- see setOnlinePitch()/renderOnlinePitchToggle()'s own comments for the other half
  claimSide(side,actor.type,actor.label,actor.padId); // calls renderSideSelect() itself, which now sees both olPickedSide and hitAndPitch already set
 }
 function olBackOut(side){ // undo a pick, back to step 1 -- only legal before locking (the Back button itself is hidden once locked)
@@ -2148,42 +2231,41 @@ function renderOnlineClaim(){
  });
  renderOlPickCursor();
 }
-function renderOnlinePitchToggle(side){ // v371: online's own copy, separate from local's renderPitchToggle() below. v378: the "no gamepad-claim
- // restriction" this comment used to claim was wrong -- pollHumanPitch() (reading stick/D-pad direction to pick a pitch type) and startPitch()'s
- // own trigger are BOTH hard-gated to a gamepad claim (see pollHumanPitch()'s `b.type!=='gamepad'` bail and startPitch()'s trigger site), so a
- // keyboard/mouse/touch claim selecting Hit & Pitch here was pure UI deception: the toggle said Hit & Pitch, hitAndPitch[side] really was true,
- // but nothing ever actually let that side pitch -- the CPU threw for them anyway, silently. Gated for real now, same eligibility rule local's
- // own toggle already uses.
+function renderOnlinePitchToggle(side){ // v371: online's own copy, separate from local's renderPitchToggle() below. v378: gated to devices that
+ // can actually pitch -- pollHumanPitch() and startPitch()'s own trigger both used to be hard-gated to a gamepad claim, so a keyboard/mouse/touch
+ // claim selecting Hit & Pitch here was pure UI deception: the toggle said Hit & Pitch, hitAndPitch[side] really was true, but nothing ever
+ // actually let that side pitch -- the CPU threw for them anyway, silently. v381: mouse and touch now ALSO really pitch (see the pointer-driven
+ // pick/aim listeners near pollHumanPitch()), so pitchCapable() -- shared with local's own renderPitchToggle() below -- now admits all three;
+ // only keyboard (which has no pitching gesture of its own) stays excluded.
  $(side==='red'?'olRedBind':'olBlueBind').textContent=bindLabel(sideBind[side]);
- const b=sideBind[side],eligible=!!b&&b.type==='gamepad',row=$(side==='red'?'olRedPitchRow':'olBluePitchRow'),hint=$(side==='red'?'olRedPitchHint':'olBluePitchHint');
+ const b=sideBind[side],eligible=!!b&&pitchCapable(b.type),row=$(side==='red'?'olRedPitchRow':'olBluePitchRow'),hint=$(side==='red'?'olRedPitchHint':'olBluePitchHint');
  row.classList.toggle('hidden',!eligible);
- if(!eligible){hitAndPitch[side]=false;hint.textContent='🤖 CPU pitches for you -- connect a controller to pitch yourself';return}
- hint.textContent='🕹️ left stick / D-pad to toggle';
+ if(!eligible){hitAndPitch[side]=false;hint.textContent='🤖 CPU pitches for you -- connect a controller, or claim with mouse/touch, to pitch yourself';return}
+ hint.textContent=b.type==='gamepad'?'🕹️ left stick / D-pad to toggle':b.type==='mouse'?'🖱️ click the arrows to toggle':'👆 tap the arrows to toggle';
  const btn=$(side==='red'?'olRedPitch':'olBluePitch');
  btn.textContent=hitAndPitch[side]?'🎯 Hit & Pitch':'Hit Only';
  btn.classList.toggle('on',hitAndPitch[side]);
  $(side==='red'?'olRedArrowL':'olBlueArrowL').classList.toggle('active',!hitAndPitch[side]);
  $(side==='red'?'olRedArrowR':'olBlueArrowR').classList.toggle('active',hitAndPitch[side]);
 }
-function setOnlinePitch(side,val){ // v378: gamepad-only -- see renderOnlinePitchToggle()'s own comment for why. This is the single chokepoint
- // every path (arrow clicks, the center-button toggle via toggleOnlinePitch(), the dedicated online keydown Left/Right, the left-stick poll
- // below) already calls through, so gating it here alone covers all of them.
- if(!sideBind[side]||sideBind[side].type!=='gamepad')return;
+function setOnlinePitch(side,val){ // v378/v381: gated to devices that can actually pitch (pitchCapable()) -- see renderOnlinePitchToggle()'s
+ // own comment for why. This is the single chokepoint every path (arrow clicks, the center-button toggle via toggleOnlinePitch(), the dedicated
+ // online keydown Left/Right, the left-stick poll below) already calls through, so gating it here alone covers all of them.
+ if(!sideBind[side]||!pitchCapable(sideBind[side].type))return;
  if(hitAndPitch[side]===val)return;hitAndPitch[side]=val;renderSideSelect()}
 function toggleOnlinePitch(side){setOnlinePitch(side,!hitAndPitch[side])}
-function renderPitchToggle(side){ // v349: only a side CURRENTLY claimed by a gamepad gets the toggle at all -- see hitAndPitch's own declaration
- // v371: LOCAL ONLY now -- online has its own copy (renderOnlinePitchToggle() above) with no gamepad restriction, called separately from
- // renderOnlineClaim() instead of from here. Bails out early in online mode specifically because this function's own "not eligible -> force
- // hitAndPitch[side] back to false" line below would otherwise stomp the online toggle right back off the instant it's set -- an online claim
- // is routinely keyboard/mouse/touch, which this function (correctly, for LOCAL) treats as ineligible.
+function renderPitchToggle(side){ // v349: only a side CURRENTLY claimed by a device that can actually pitch gets the toggle at all -- see
+ // pitchCapable()/hitAndPitch's own declaration. v371: LOCAL ONLY now -- online has its own copy (renderOnlinePitchToggle() above), called
+ // separately from renderOnlineClaim() instead of from here. Bails out early in online mode specifically because this function's own "not
+ // eligible -> force hitAndPitch[side] back to false" line below would otherwise stomp the online toggle right back off the instant it's set.
  if(onlineModeActive())return;
  const row=$(side==='red'?'ssRedPitchRow':'ssBluePitchRow'),hint=$(side==='red'?'ssRedPitchHint':'ssBluePitchHint'),back=$(side==='red'?'ssRedBackBtn':'ssBlueBackBtn');
- const b=sideBind[side],eligible=!!b&&b.type==='gamepad';
+ const b=sideBind[side],eligible=!!b&&pitchCapable(b.type);
  row.classList.toggle('hidden',!eligible); // v373: now the whole arrow+button row (ssRedPitchRow/ssBluePitchRow), not just the bare button --
  // see the markup's own comment for why the arrows needed a wrapper to toggle together
  hint.classList.toggle('show',eligible); // v351: the toggle alone didn't say it could ALSO be flipped with the right stick -- see pollSideSelectPitchToggle()
- back.classList.toggle('hidden',!b); // v373: Back/unclaim is offered for ANY claim type (not just gamepad) -- it's local's own undo for the new
- // lock-in below (ssNavLeft()/ssNavRight()), separate from the Hit Only/Hit & Pitch toggle which stays gamepad-only
+ back.classList.toggle('hidden',!b); // v373: Back/unclaim is offered for ANY claim type -- it's local's own undo for the new lock-in below
+ // (ssNavLeft()/ssNavRight()), separate from the Hit Only/Hit & Pitch toggle which stays limited to devices that can actually pitch
  if(!eligible){hitAndPitch[side]=false;return}
  const btn=$(side==='red'?'ssRedPitch':'ssBluePitch');
  btn.textContent=hitAndPitch[side]?'🎯 Hit & Pitch':'Hit Only';
@@ -2191,10 +2273,10 @@ function renderPitchToggle(side){ // v349: only a side CURRENTLY claimed by a ga
  $(side==='red'?'ssRedArrowL':'ssBlueArrowL').classList.toggle('active',!hitAndPitch[side]); // v373: same arrow-highlight treatment as online's renderOnlinePitchToggle()
  $(side==='red'?'ssRedArrowR':'ssBlueArrowR').classList.toggle('active',hitAndPitch[side]);
 }
-function togglePitch(side){if(sideBind[side]&&sideBind[side].type==='gamepad'){hitAndPitch[side]=!hitAndPitch[side];renderSideSelect()}}
+function togglePitch(side){if(sideBind[side]&&pitchCapable(sideBind[side].type)){hitAndPitch[side]=!hitAndPitch[side];renderSideSelect()}}
 function setLocalPitch(side,val){ // v373: SET (not flip) -- backs the new arrow clicks and the locked left/right nav in ssNavLeft()/ssNavRight()
- // below. Mirrors online's setOnlinePitch() but keeps local's own existing gamepad-claim-only restriction (togglePitch()'s, above).
- if(!sideBind[side]||sideBind[side].type!=='gamepad')return;
+ // below. Mirrors online's setOnlinePitch() but keeps local's own existing pitch-capable-claim-only restriction (togglePitch()'s, above).
+ if(!sideBind[side]||!pitchCapable(sideBind[side].type))return;
  if(hitAndPitch[side]===val)return;
  hitAndPitch[side]=val;renderSideSelect();
 }
@@ -3448,10 +3530,11 @@ addEventListener('pointerdown',audioInit,{once:true});addEventListener('keydown'
 function loop(){requestAnimationFrame(loop);try{tick()}catch(e){console.log('[wiffleball] tick() threw:',e,'| st was',st,'onlineActive',onlineActive,'iAmBatting',onlineActive&&typeof iAmBatting==='function'&&iAmBatting());$('msg').style.color='#f88';$('msg').textContent='Error';$('sub').textContent=e.message+' '+((e.stack||'').split('\n')[1]||'');st='wait';tNext=performance.now()/1000+3;last=performance.now()/1000}}
 function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchToggle();pollOnlinePitchStick();if(paused){if(gameVisualsOn())ren.render(sc,cam);return}const now=performance.now()/1000;const dt=Math.min(0.05,now-last);
  if(gameStarted&&st==='wait'&&now>=tNext&&!gameOver){
-  // v349: human pitching, LOCAL -- the side NOT batting is the one on defense; if that side is both claimed by a gamepad and has Hit & Pitch on,
-  // hand the next pitch to its own player instead of auto-starting a CPU one (enterPitchPick() leaves st==='pitchPick' for pollHumanPitch(), just
-  // called above, to drive from here on -- it's the one that eventually calls startPitch() via commitHumanPitch(), same as every other pitch,
-  // human or CPU, online or offline -- see commitHumanPitch()'s own v367 comment for why that's true offline now too).
+  // v349: human pitching, LOCAL -- the side NOT batting is the one on defense; if that side is both claimed by a device that can actually pitch
+  // (pitchCapable() -- gamepad, mouse, or touch, see v381) and has Hit & Pitch on, hand the next pitch to its own player instead of auto-starting
+  // a CPU one (enterPitchPick() leaves st==='pitchPick' for pollHumanPitch(), just called above, to drive from here on -- it's the one that
+  // eventually calls startPitch() via commitHumanPitch(), same as every other pitch, human or CPU, online or offline -- see commitHumanPitch()'s
+  // own v367 comment for why that's true offline now too).
   // v356: human pitching, ONLINE -- a real architecture split, not just an extra condition, because only the BATTING client has ever been allowed
   // to own ball physics/call startPitch() online (see startPitch()'s own netSend, and every applyNet* function's "spectator only" comments) --
   // that's what lets the spectator just mirror received events instead of running its own independent physics. A human defender's pick/aim still
@@ -3464,11 +3547,11 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
   // CPU pitch uses.
   const pitchSide=battingTeam==='red'?'blue':'red';
   if(!onlineActive){
-   if(hitAndPitch[pitchSide]&&sideBind[pitchSide]&&sideBind[pitchSide].type==='gamepad')enterPitchPick(pitchSide);
+   if(hitAndPitch[pitchSide]&&sideBind[pitchSide]&&pitchCapable(sideBind[pitchSide].type))enterPitchPick(pitchSide);
    else startPitch(now);
   } else if(iAmBatting()){
    if(olPeerReady&&!oppHitAndPitch)startPitch(now); // oppHitAndPitch: wait for their humanPitchChosen event instead of picking one ourselves
-  } else if(olPeerReady&&hitAndPitch[pitchSide]&&sideBind[pitchSide]&&sideBind[pitchSide].type==='gamepad'){
+  } else if(olPeerReady&&hitAndPitch[pitchSide]&&sideBind[pitchSide]&&pitchCapable(sideBind[pitchSide].type)){
    enterPitchPick(pitchSide);
   }
  } // v293: belt-and-suspenders -- continuePress() already stops scheduling a next pitch once the game ends, this just makes sure nothing else can auto-start one either. v341: gameStarted&& added -- see its declaration
