@@ -14,7 +14,7 @@
 html,body{margin:0;height:100%;background:#1d2b1d;overflow:hidden;font-family:system-ui,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
 canvas{display:block;width:100%;height:100%}
 .h{position:fixed;color:#fff;text-shadow:0 1px 3px #000;pointer-events:none}
-/* shifted right of dead-center so it clears the top-left button row (Pause/Ambience/Camera/Debug) instead of sitting under it */
+/* shifted right of dead-center so it clears the top-left button row (Pause/Fullscreen/Copy debug/Camera/Debug) instead of sitting under it. v382: Ambience moved off this row entirely -- pause menu only now, see #btns/pm-amb below. */
 #sbrow{top:calc(8px + env(safe-area-inset-top,0px));left:50%;transform:translateX(calc(-50% + 36px));display:flex;align-items:center;gap:10px}
 #scores{display:flex;gap:4px}
 .teamScore{font-weight:800;font-size:18px;border-radius:8px;color:#fff;width:32px;height:30px;position:relative;perspective:220px}
@@ -262,7 +262,7 @@ exactly the "floats up to the top-left" bug. */
 <div class="h" id="pad" style="left:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:12px"></div><div class="h" id="hint">Hold (Space / touch / A or RT) to stride &amp; load · release to swing · press again right away = check swing · B / Right-click / Alt = next pitch · C = change camera</div>
 <div class="h" id="lastPitch" style="right:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:13px;background:#000a;padding:4px 10px;border-radius:6px;display:none"></div>
 <div id="mmwrap"><canvas id="mm" width="160" height="160"></canvas><div id="mmtext"></div></div>
-<div id="btns"><button id="pz">⏸ Pause</button><button id="fs">⛶ Fullscreen</button><button id="cp">Copy debug</button><button id="ab">Ambience: On</button><button id="cb"></button><button id="tg">Debug</button></div>
+<div id="btns"><button id="pz">⏸ Pause</button><button id="fs">⛶ Fullscreen</button><button id="cp">Copy debug</button><button id="cb"></button><button id="tg">Debug</button></div>
 <div id="gsMenu"><div id="gsBox"><h2>Game Settings</h2>
  <div id="gsNote">Set before starting. Hosting an online match locks these in for both players once someone joins.</div>
  <div class="pmrow"><span>Pitcher Type</span><button id="gs-pitcher"></button></div>
@@ -371,7 +371,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v382'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v383'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -1926,7 +1926,7 @@ function pollPad(){
  if(!d&&padD){release({type:'gamepad',padId:heldPadId});heldPadId=''}
  padD=d}
 $('cb').onclick=nextCam;addEventListener('keydown',e=>{if(e.code==='KeyC'&&!typingInField())nextCam()});
-$('ab').onclick=cycleAmb;
+// v382: the main-screen Ambience button (#ab) is gone -- On/Off is now pause-menu only (see $('pm-amb') below), per request. cycleAmb() itself is unchanged.
 // Pause menu: freezes the game clock (everything is driven by absolute timestamps, so on resume we shift them all forward by however long the pause lasted, instead of letting the pitch jump ahead)
 let gameStarted=false; // v341: a second, independent gate -- only ever set true inside beginGame() (the real "Play Ball" click/press), on top of
 // `paused`. `paused` alone is overloaded: the kid-batter warm-up, the F-key bat-scrub tool, and the rotate-to-landscape gate all also flip it, so
@@ -3073,8 +3073,12 @@ async function copyDebug(){const t=debugText();let ok=false;
  if(ok){const b=$('cp');b.textContent='Copied!';setTimeout(()=>{b.textContent='Copy debug'},1200)}else showCopyBox(t)}
 $('cp').onclick=copyDebug;
 $('btns').addEventListener('click',e=>{if(e.target.blur)e.target.blur()}); // so pressing Space to swing never re-triggers a button
-$('tg').onclick=()=>{dbgOn=!dbgOn;$('dbg').style.display=dbgOn?'block':'none';fMarks.visible=dbgOn;$('cp').style.display=dbgOn?'':'none';fan.visible=dbgOn};
-$('dbg').style.display=dbgOn?'block':'none';fMarks.visible=dbgOn;$('cp').style.display=dbgOn?'':'none'; // apply the off-by-default state on load too -- the click handler above only runs once you actually click Debug
+$('tg').onclick=()=>{dbgOn=!dbgOn;$('dbg').style.display=dbgOn?'block':'none';fMarks.visible=dbgOn;$('cp').style.display=dbgOn?'':'none';fan.visible=dbgOn;$('sub').style.display=dbgOn?'block':'none'};
+$('dbg').style.display=dbgOn?'block':'none';fMarks.visible=dbgOn;$('cp').style.display=dbgOn?'':'none';$('sub').style.display=dbgOn?'block':'none'; // apply the off-by-default state on load too -- the click handler above only runs once you actually click Debug
+// v382: #sub -- the pitch-speed/exit-velo/launch-angle/fielding-note line say() writes below every result -- is now folded into the same Debug
+// on/off switch as the rest of this diagnostic readout (dbg panel/fan lines/field marks), off by default. say() itself is unchanged and still
+// writes the real text into #sub every single result (hit or not) regardless of dbgOn, so turning Debug on mid-game reveals it immediately on
+// the very next pitch's result rather than needing some separate re-render -- only the element's own display is what's gated here.
 function fill(f){if(f===0)$('fill').style.background='#ffd23f';$('fill').style.width=(f*100)+'%'}
 // ---- 3D swing path + contact ----
 let swp={hy:.92,elc:-.36,L:.94};
@@ -3542,7 +3546,7 @@ function playFenceHit(vr){if(!actx)return;const t=actx.currentTime; // synthesiz
  const bd=noiseBuf(.12,true),bs=actx.createBufferSource(),bf=actx.createBiquadFilter(),bg=actx.createGain();bs.buffer=bd;bf.type='lowpass';bf.frequency.value=500;bg.gain.setValueAtTime(.046*vol,t);bg.gain.exponentialRampToValueAtTime(.001,t+.1);bs.connect(bf);bf.connect(bg);bg.connect(actx.destination);bs.start();bs.stop(t+.12)}
 function playTreeRustle(){if(!actx)return;const n=noiseBuf(.35,false),s=actx.createBufferSource(),f=actx.createBiquadFilter(),g=actx.createGain(),t=actx.currentTime;s.buffer=n;f.type='highpass';f.frequency.value=3000;f.Q.value=.7;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.1,t+.03);g.gain.exponentialRampToValueAtTime(.001,t+.32);s.connect(f);f.connect(g);g.connect(actx.destination);s.start();s.stop(t+.35)} // ball brushing through the scattered background trees -- a filtered-noise burst, same synthesis approach as the ambience leaf-rustle layer below
 // ---- park ambience (synthesised placeholder): breeze bed + leaf rustle + distant murmur + birds ----
-const AMB_LEVELS=[['On',1],['Low',.4],['Off',0]];let ambSel=0,amb=null;
+const AMB_LEVELS=[['On',.4],['Off',0]];let ambSel=0,amb=null; // v382: simplified from On/Low/Off (1/.4/0) to a plain On/Off toggle per request -- 'On' now plays at the volume 'Low' used to (.4), 'Off' unchanged (0). ambSel still just an index into this array, so cycleAmb() (now a 2-way toggle instead of a 3-way cycle) and everything else that reads AMB_LEVELS[ambSel] needs no other change.
 function noiseBuf(sec,pink){const n=(actx.sampleRate*sec)|0,b=actx.createBuffer(1,n,actx.sampleRate),d=b.getChannelData(0);let b0=0,b1=0,b2=0;for(let i=0;i<n;i++){const w=Math.random()*2-1;if(pink){b0=.99765*b0+w*.099;b1=.963*b1+w*.2965;b2=.57*b2+w*1.0526;d[i]=(b0+b1+b2+w*.1848)*.25}else d[i]=w}return b}
 function lfo(param,rate,depth){const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=rate;g.gain.value=depth;o.connect(g);g.connect(param);o.start()}
 function ambLayer(buf,type,freq,q,gain,lfoRate,lfoDepth,fRate,fDepth){const src=actx.createBufferSource(),f=actx.createBiquadFilter(),g=actx.createGain();src.buffer=buf;src.loop=true;f.type=type;f.frequency.value=freq;f.Q.value=q;g.gain.value=gain;src.connect(f);f.connect(g);g.connect(amb.out);src.start();if(lfoRate)lfo(g.gain,lfoRate,lfoDepth);if(fRate)lfo(f.frequency,fRate,fDepth)}
@@ -3559,7 +3563,7 @@ function ambStart(){if(!actx||amb)return;amb={out:actx.createGain()};amb.out.gai
  ambLayer(wh,'highpass',3500,.7,.004,.13,.0015);         // leaf rustle
  ambLayer(pk,'bandpass',300,.6,.007,.04,.0008);         // distant murmur / far-off traffic
  amb.timer=setTimeout(birdLoop,1500)}
-function cycleAmb(){ambSel=(ambSel+1)%AMB_LEVELS.length;$('ab').textContent='Ambience: '+AMB_LEVELS[ambSel][0];if(amb)amb.out.gain.setTargetAtTime(AMB_LEVELS[ambSel][1],actx.currentTime,.3)}
+function cycleAmb(){ambSel=(ambSel+1)%AMB_LEVELS.length;if(amb)amb.out.gain.setTargetAtTime(AMB_LEVELS[ambSel][1],actx.currentTime,.3)} // v382: no longer touches $('ab') -- that main-screen button is gone, the pause menu's own $('pm-amb') label is kept current by refreshPauseLabels() (called right after this, see its click handler) instead
 document.addEventListener('visibilitychange',()=>{if(!actx)return;if(document.hidden)actx.suspend();else actx.resume()});
 addEventListener('pointerdown',audioInit,{once:true});addEventListener('keydown',audioInit,{once:true});
 function loop(){requestAnimationFrame(loop);try{tick()}catch(e){console.log('[wiffleball] tick() threw:',e,'| st was',st,'onlineActive',onlineActive,'iAmBatting',onlineActive&&typeof iAmBatting==='function'&&iAmBatting());$('msg').style.color='#f88';$('msg').textContent='Error';$('sub').textContent=e.message+' '+((e.stack||'').split('\n')[1]||'');st='wait';tNext=performance.now()/1000+3;last=performance.now()/1000}}
