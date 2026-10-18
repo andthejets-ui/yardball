@@ -439,6 +439,14 @@ window.YB_FB={
  // overwrite, which would race and could silently drop that concurrent append.
  async trimEvLog(code,staleEntries){
   try{await updateDoc(doc(db,'matches',code.toLowerCase()),{evLog:arrayRemove(...staleEntries)})}catch(e){}
+ },
+ // v403: a real request -- the spectator's own swing/contact debug minimap and stat panel never freezes into a real snapshot (and the real
+ // Load/Swing/Contact numbers it should show only ever get computed on the BATTING side's own screen -- see sendSwingDbgIfOnline()'s own
+ // comment for why). Deliberately NOT routed through evLog/arrayUnion, same reasoning as sendPing/sendPong -- only the LATEST pitch's own debug
+ // snapshot ever matters, nothing here needs replaying in order, so a plain overwritten field (never growing the match doc) is the right shape,
+ // completely decoupled from anything evLog/contact/result-timing-sensitive.
+ async sendSwingDbg(code,role,data){
+  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'SwingDbg']:data})}catch(e){}
  }
 };
 window.dispatchEvent(new Event('yb-fb-ready'));
@@ -457,7 +465,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v402'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v403'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2829,6 +2837,10 @@ let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // 
 // between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
 // echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
 // unchanged field don't re-send an echo or re-feed the same sample over and over.
+let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1; // v403: see sendSwingDbgIfOnline()'s own comment -- swingDbgSeqCounter is OUR OWN incrementing
+// counter (a plain overwritten object comes back as a brand-new JS object on every snapshot, never reference-equal, so a seq number is the only
+// reliable way to tell "this is the same pitch's data again" from "this is a new pitch's data"); lastPeerSwingDbgSeq is that same de-dupe guard
+// on the receiving (spectator's) side.
 const EVLOG_TRIM_MIN=20; // v399: see trimStaleEvLog()'s own comment -- trim in batches, not one entry at a time, so this doesn't turn into its
 // own steady stream of extra writes on top of real gameplay events and the heartbeat.
 let evLogTrimInFlight=false; // v399: guards against firing a redundant trim write for the same batch again before the first one's write has
@@ -2886,6 +2898,36 @@ function trimStaleEvLog(data,peerRole){ // v399: evLog (see sendEvent()'s own co
  evLogTrimInFlight=true;
  window.YB_FB.trimEvLog(olMatchCode,stale).finally(()=>{evLogTrimInFlight=false});
 }
+function sendSwingDbgIfOnline(){ // v403: a real report -- "we still see bogus data for the most part on the swing/contact picture-in-picture
+ // on the pitcher's side". Root cause: the minimap (drawMM()) only ever freezes into a real CONTACT/MISS snapshot when `snap` is set, and `snap`
+ // is only ever written inside tryContact() -- the function that does the REAL local physics calculation of whether the bat hit the ball, which
+ // never runs on the spectator's screen at all (outcomes there have to come from the network, not a local guess -- see iAmSpectating's own
+ // comment). So the minimap just keeps falling through to its live "TOP VIEW" branch forever on the spectator's side, and the Load/Swing/
+ // Contact numbers underneath (resLines) have the identical problem -- they come from swingInfo, which is also only ever populated by that
+ // same real local calculation the spectator never runs (so it just reads empty/stale there, never the real thing).
+ // Fix: the BATTING side already computes the real snap{a,ball,hit} and resLines (showDbg(), right before this is called) for every single
+ // pitch -- just send that already-computed, already-formatted result along, the same decoupled-plain-field way the ping/pong heartbeat
+ // already does (see sendSwingDbg()'s own comment) rather than inventing any new logic the spectator has to reproduce and keep in sync with
+ // showDbg()'s own (quite involved) wording rules. The incoming pitch's own dotted trajectory needs no equivalent -- it's already identical,
+ // deterministic physics on both screens (see tick()'s own `path.push` in the 'pitch' state), so only the three numbers (bat angle, contact/
+ // closest-approach point) and the finished text lines actually need to cross the network. This is a single extra overwritten field, not
+ // appended to evLog, read by nothing gameplay-critical (processSwingDbg() below only ever touches the debug minimap/overlay) -- it cannot
+ // affect pitch timing, sync, or anything this session already stabilized.
+ if(!onlineActive||!iAmBatting()||!window.YB_FB)return;
+ swingDbgSeqCounter++;
+ window.YB_FB.sendSwingDbg(olMatchCode,olRole,{seq:swingDbgSeqCounter,hasSwing:!!snap,a:snap?snap.a:null,bx:snap?snap.ball[0]:null,bz:snap?snap.ball[1]:null,hit:snap?snap.hit:false,lines:resLines.slice()});
+}
+function processSwingDbg(data,peerRole){ // v403: called from both olHostMatch()/olJoinMatch()'s own watch() callbacks, same as processPingPong()
+ // -- see sendSwingDbgIfOnline()'s own comment for the full report. Only ever meaningful for the spectator: the real batter already has their
+ // own correct, live version of all of this, so overwriting it with a (slightly delayed, network-round-tripped) copy of itself would be a pure
+ // downgrade for them, never an improvement.
+ if(iAmBatting())return;
+ const d=data[peerRole+'SwingDbg'];
+ if(!d||d.seq===lastPeerSwingDbgSeq)return;
+ lastPeerSwingDbgSeq=d.seq;
+ snap=d.hasSwing?{a:d.a,path:path.slice(),ball:[d.bx,d.bz],hit:d.hit}:null;
+ resLines=d.lines||[];
+}
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
  // skew-FREE: both timestamps it compares are this device's own clock, so a disagreeing iPhone/PC clock can't hide a real slow connection from
@@ -2927,6 +2969,7 @@ function olReset(){
  netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
+ swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1; // v403: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -2984,6 +3027,7 @@ async function olHostMatch(code,statusEl){
   // it, and the trimEvLog() call below (see processPingPong()) addresses the other half of the same growth problem (the array itself).
   processNetEvLog(data.evLog);
   processPingPong(data,'join'); // v398/v399: see its own comment
+  processSwingDbg(data,'join'); // v403: see its own comment
   oppHitAndPitch=!!data.awayHitAndPitch; // v356: host's opponent is always the joiner/away side -- keep this live (not just read once) in case they flip their toggle before locking in
   if(data.joinReady)olPeerReady=true; // v318: the joiner's own beginGame() click, mirrored here so the host doesn't throw a pitch before the joiner's screen has actually unpaused
   if(data.join&&data.join.present){statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;startPingHeartbeat();showTutorial()}}
@@ -3006,6 +3050,7 @@ async function olJoinMatch(code,statusEl){
   if(!data){statusEl.style.color='#ff8a80';statusEl.textContent='Match not found (it may have expired).';return}
   processNetEvLog(data.evLog); // v399: see olHostMatch()'s own watch() callback for why the debug evLog dump that used to sit here is gone
   processPingPong(data,'host'); // v398/v399: see its own comment
+  processSwingDbg(data,'host'); // v403: see its own comment
   if(data.settings){pitcherMode=data.settings.pitcherMode??pitcherMode;pitchLocMode=data.settings.pitchLocMode??pitchLocMode;inningsMode=data.settings.inningsMode??inningsMode;refreshSettingsLabels()} // v335: adopt the host's chosen game settings -- see hostMatch()'s own comment for why these ride along on the match doc itself
   oppHitAndPitch=!!data.homeHitAndPitch; // v356: joiner's opponent is always the host/home side -- kept live for the same reason as the host-side branch above
   if(data.hostReady)olPeerReady=true; // v318: the host's own beginGame() click, mirrored here so the joiner doesn't throw a pitch before the host's screen has actually unpaused
@@ -4285,7 +4330,7 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  }
  if(st==='pitch'){const tau=now-tRel;const p=pos(Math.min(tau,P.inZ?P.T:P.T+0.25));ball.position.copy(p);shd.position.set(p.x,0.015,p.z);if(p.z>-4)path.push([p.x,p.z]);
   trailPts.push(p.clone());if(trailPts.length>14)trailPts.shift();setTrail();
-  if(tau>P.T+0.25&&!contacted&&!iAmSpectating){ball.position.y=-9;shd.position.y=-9;trailPts.length=0;setTrail();if(loading)loading=false;endNoContact();showDbg()}}
+  if(tau>P.T+0.25&&!contacted&&!iAmSpectating){ball.position.y=-9;shd.position.y=-9;trailPts.length=0;setTrail();if(loading)loading=false;endNoContact();showDbg();sendSwingDbgIfOnline()}}
   // v326: this was the actual remaining source of the false "miss" -- iAmSpectating was defined (and correctly applied to tryContact() above) but
   // never applied here too, so endNoContact() -- the thing that actually calls say('SWING & MISS'/'STRIKE'/'BALL') -- kept running unconditionally
   // on the spectator's own clock every single pitch, same bug as before, just one line further down than where I'd actually fixed it.
@@ -4322,7 +4367,13 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
    if((H.roll&&Math.hypot(v.x,v.z)<0.8)||now-hitT>10){st='x';break} // used to also stop the instant `crossed` was set, freezing home runs mid-air at the fence -- now it keeps flying/bouncing (fence + outer wall above) until it actually settles
    if(!first&&H.p.y>0.08)H.wasG=false}
   ball.position.copy(H.p);shd.position.set(H.p.x,0.015,H.p.z);if(H.p.z>-4&&H.p.z<1.5&&path.length<600)path.push([H.p.x,H.p.z]);trailPts.push(H.p.clone());if(trailPts.length>24)trailPts.shift();setTrail();
-  if(st==='x'){if(!first)first={p:H.p.clone(),d:Math.hypot(H.p.x,H.p.z),peak,t:H.t};endHit();showDbg()}}
+  if(st==='x'){if(!first)first={p:H.p.clone(),d:Math.hypot(H.p.x,H.p.z),peak,t:H.t};endHit();
+   // v403: showDbg() here used to run unconditionally -- harmless on the real batter (its own correct swingInfo), but on the spectator it
+   // recomputes its OWN (always empty -- swingInfo is never populated for them) "No swing" result and resLines=[], immediately clobbering
+   // whatever the network just supplied via processSwingDbg() the instant their own replayed flight settles -- exactly the moment they'd be
+   // looking at it. Only the real batter still needs this call at all; the spectator's version of the debug panel comes from the network now.
+   if(!iAmSpectating)showDbg();
+   sendSwingDbgIfOnline()}}
  if(st==='result'&&now>=tNext&&!holdNext){ball.position.y=-9;shd.position.y=-9;trailPts.length=0;setTrail();st='wait';tNext=now+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN)} // random idle stretch before the next windup starts (see IDLE_MIN/IDLE_MAX) -- was a flat 0.6s, which both felt instant off a button press and let a batter learn its rhythm
  drawMM();updateLeaves(dt);last=now;ren.render(sc,cam)}
 function setTrail(){const n=Math.min(trailPts.length,TN);for(let i=0;i<n;i++){const p=trailPts[i];tpos[i*3]=p.x;tpos[i*3+1]=p.y;tpos[i*3+2]=p.z}trg.attributes.position.needsUpdate=true;trg.setDrawRange(0,n)}
