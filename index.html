@@ -457,7 +457,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v399'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v400'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2787,6 +2787,9 @@ let pitchChosenSentAt=0; // v394: see commitHumanPitch()'s own comment -- stampe
 let netPendingHumanPitch=null; // v395: see applyNetHumanPitchChosen()'s own comment -- a defender's pitch choice arriving before OUR OWN
 // (the batter's) st has reached 'wait' yet needs to be remembered, not dropped, the same way netPendingContact/netPendingResult/
 // netPendingLoadStart/netPendingAdvance already are. Consumed in continuePress(), the only place our own st actually becomes 'wait'.
+let netPendingSwing=null; // v400: a real report -- "first pitch of a half-inning saw the bat disappear/never swing, then the ball just flew out
+// as a hit" -- see applyNetSwing()'s own comment for the root cause and why this is the fix, and why it's set only for a genuinely EARLY
+// arrival (never a stale one). Consumed in applyNetPitchStart(), the only place our own st actually reaches 'windup' for a new pitch.
 let netPendingAdvance=false; // v393d: a batter who dismisses their own result sends 'advance' the instant THEY move on -- but the v393d fix above
 // now makes US (the spectator/pitcher) correctly wait for OUR OWN local hit-flight physics to actually finish (home run hang time included)
 // before we even reach st==='result' ourselves. A fast-settling batter can easily press continue and have 'advance' land here while we're still
@@ -2921,6 +2924,7 @@ function olReset(){
  netPendingAdvance=false; // v393d: same reasoning -- don't let a stashed-but-never-consumed early advance from a previous match bleed into the next one
  pitchChosenSentAt=0; // v394: same reasoning -- don't let a never-echoed humanPitchChosen timestamp from a previous match bleed into the next one
  netPendingHumanPitch=null; // v395: same reasoning -- don't let a stashed-but-never-consumed early pitch choice from a previous match bleed into the next one
+ netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
@@ -3306,11 +3310,32 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  // before this moment even arrived, begin this pitch already in the loaded stance instead of idle, exactly matching what actually happened on
  // their screen. See applyNetLoadStart()'s own comment for the full report this fixes.
  if(netPendingLoadStart){netPendingLoadStart=false;loading=true;loadStart=now}
+ // v400: same idea, one step further along -- if a 'swing' for THIS pitch already arrived and got stashed (see applyNetSwing()'s own comment)
+ // before we'd even reached 'windup' yet, replay it right now. st is already 'windup' at this point, so applyNetSwing()'s own gate lets it
+ // through normally -- this just makes sure it isn't the LAST thing to ever ask "has windup started yet" and get a stale "no".
+ if(netPendingSwing){const d=netPendingSwing;netPendingSwing=null;applyNetSwing(d)}
  $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
 }
 function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's swing start time, expressed relative to THAT pitch's own tRel, so it
  // carries over correctly onto the spectator's own (NET_DELAY-shifted) tRel and the swing animates in the same relative position in the pitch.
- if(st!=='windup'&&st!=='pitch')return; // stale/out-of-order event (e.g. arrived after the pitch already resolved) -- ignore rather than reset mid-result
+ // v400: a real report -- "first pitch of a half-inning saw the bat disappear/never swing, then the ball just flew out as a hit." Root cause:
+ // the OLD version of this guard treated EVERY out-of-state arrival as stale/late and silently dropped it -- the one event left in this whole
+ // file still working that way, after netPendingContact/netPendingResult/netPendingLoadStart/netPendingAdvance/netPendingHumanPitch were each
+ // fixed in turn for the exact same mistake (see their own comments). But "stale" was never the only explanation: 'pitchStart' and 'swing' are
+ // two SEPARATE, unawaited Firestore writes from the same sender (see netSend()'s own comment -- sendEvent() retries up to 3 times with backoff
+ // on a transient failure), so it's entirely possible for 'swing' to actually ARRIVE in a snapshot before 'pitchStart' has -- not reordered once
+ // both are here (processNetEvLog()'s own seq-sort already guarantees that), but genuinely not-yet-delivered at all. That's most likely to
+ // actually happen right when a burst of OTHER writes is competing for the connection at the same moment -- continuePress()'s own half-inning
+ // flip is exactly that: it fires 'halfFlip' AND 'advance' back-to-back from the same call, right before the next pitch's own 'pitchStart' is
+ // about to go out. When this happens, st is still sitting on whatever pre-windup state we were in (wait/pitchPick/pitchAim) -- genuinely EARLY,
+ // not stale -- and dropping it meant the bat never got its ts/swp set up at all, so it never played any swing animation, while the 'contact'
+ // that still arrived moments later (applyNetContact() has no such gate) sent the ball into its hit flight regardless -- exactly "bat
+ // disappeared, ball just flew out". A TRULY stale swing is a different, real case this still has to keep rejecting: one arriving once we're
+ // already on 'hit' or 'result' for this same old pitch, i.e. we've moved PAST windup/pitch without it, so applying it now would stomp onto
+ // whatever pitch comes next instead. Telling them apart the same way applyNetAdvance() already does for its own mirror-image case: early means
+ // we haven't reached the target state yet (behind), stale means we're already past it (ahead).
+ if(st==='wait'||st==='pitchPick'||st==='pitchAim'){netPendingSwing=d;return}
+ if(st!=='windup'&&st!=='pitch')return; // already past this same old pitch (hit/result) -- genuinely stale, not early; drop it rather than stomp the next one
  // v334: mirror this swing's real swp (see the netSend('swing',...) call's own comment for why) -- same two lines release()/press() themselves
  // run right after building it (HC.y/HC.x feed the hand-position interpolation the bat follows through the whole swing).
  if(d.swp){swp={hy:d.swp.hy,hx:d.swp.hx,xx:d.swp.xx,elc:d.swp.elc,L:d.swp.L,aC:d.swp.aC,aDip:d.swp.aDip,adjT:d.swp.adjT,sC:d.swp.sC,dipRelief:d.swp.dipRelief};HC.y=swp.hy;HC.x=C.PX+swp.hx}
