@@ -427,7 +427,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v392'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v393'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2729,6 +2729,8 @@ $('ssOnlineStartBtn').onclick=showTutorial;
 // capability -- see that block's own comment for why. Still connection/presence ONLY: Start begins each side's own independent local game, same
 // scope limit as before (synced gameplay is a later phase).
 let olMatchCode=null,olRole=null,olUnsub=null,olAutoStarted=false,onlineActive=false,lastEvSeq=0,olPeerReady=false,olMyReady=false,netPendingContact=null,netPendingResult=null;
+let netPendingLoadStart=false; // v392: see applyNetLoadStart()'s own comment for why this exists -- a batter pre-loading before OUR OWN windup
+// has even started needs this stashed, not dropped, the same way netPendingContact/netPendingResult already stash an early arrival.
 let advPendingSince=0,advLastSentAt=0,advResendCount=0; // v390: see continuePress()'s netSend('advance',...) call and applyNetAdvanceAck()'s own
 // comment for why 'advance' specifically needs a real acknowledgment/resend loop, unlike every other online event.
 let oppHitAndPitch=false; // v356: the OPPONENT's own Hit & Pitch choice (read from the match doc, written once at host/join time -- see
@@ -2773,6 +2775,7 @@ function olReset(){
  $('olCode').textContent='----';$('olStatus').textContent='';$('olStatus2').textContent='';$('olJoinCode').value='';
  $('ssOnlineStartBtn').classList.add('hidden');olAutoStarted=false;onlineActive=false;lastEvSeq=0;olPeerReady=false;olMyReady=false;
  advPendingSince=0;advLastSentAt=0;advResendCount=0; // v390: leaving/resetting online mode -- don't let a stale resend loop from a previous match bleed into the next one
+ netPendingLoadStart=false; // v392: same reasoning -- don't let a stashed-but-never-consumed early load from a previous match bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -2983,7 +2986,20 @@ function handleNetEvent(ev){
 function applyNetLoadStart(){ // spectator only -- v365: mirrors press()'s own load-begin exactly (loading=true;loadStart=now), see its netSend
  // call's own comment for why this event exists at all. Guarded the same way applyNetSwing/applyNetCheckSwing already are against stale/
  // out-of-order delivery and against ever running on the batting client's own screen (it already has its own real `loading`, driven locally).
- if(iAmBatting()||(st!=='windup'&&st!=='pitch'))return;
+ if(iAmBatting())return;
+ if(st!=='windup'&&st!=='pitch'){
+  // v392: a real report -- "if I load ahead of time on the batter side, it doesn't seem to send that message to the pitcher side, and there are
+  // swing disconnects on the pitchers side". Root cause: press() has NO st check at all (a batter can hold load while their own screen is still
+  // 'wait', anticipating a pitch that hasn't even been thrown yet), so this event can be generated and arrive here BEFORE our own windup has
+  // even started (pitchStart hasn't arrived/been applied on this screen yet) -- this used to just hard-drop it (the early `return` above used to
+  // cover this case too), with no stash/replay the way netPendingContact/netPendingResult already get for the identical "arrived before we were
+  // ready to use it" problem. Losing it entirely meant the spectator sat in an un-loaded idle pose the whole windup even though the real batter
+  // was already loaded well before the pitch started -- so when the (now near-instant, since they were already loaded) swing/contact arrived,
+  // there was no load phase to blend out of, reading as a "disconnect"/rushed snap straight into the swing. Stash it instead, and consume it the
+  // moment OUR OWN windup actually begins (see applyNetPitchStart()'s own check) so the spectator starts this pitch already in the loaded stance,
+  // matching reality.
+  netPendingLoadStart=true;return;
+ }
  if(loading||swinging)return; // already loading (a duplicate or late-arriving echo) or already mid-swing (a 'swing' event beat this one here,
  // e.g. reordered on a lossy connection) -- don't stomp a more-current state with a stale one
  loading=true;loadStart=performance.now()/1000;
@@ -3076,6 +3092,10 @@ function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s stat
  // applied (e.g. result arrived first, or this pitch's own no-contact result got the safety-net fallback) -- otherwise it could misfire against
  // this new pitch's own tRel/tau timeline
  tRel=now+C.WIND+3/30+netLatencyEstMs/1000;st='windup'; // v390: was the fixed NET_DELAY guess -- see its own comment (now NET_DELAY_MIN/MAX) for why this now tracks real measured latency instead
+ // v392: our own windup is starting RIGHT NOW -- if the batter already told us (via applyNetLoadStart()'s own stash) that they started loading
+ // before this moment even arrived, begin this pitch already in the loaded stance instead of idle, exactly matching what actually happened on
+ // their screen. See applyNetLoadStart()'s own comment for the full report this fixes.
+ if(netPendingLoadStart){netPendingLoadStart=false;loading=true;loadStart=now}
  $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
 }
 function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's swing start time, expressed relative to THAT pitch's own tRel, so it
@@ -3138,6 +3158,16 @@ function applyNetResult(d){ // spectator only -- normally arrives just after app
  // scheduling check (right next to netPendingContact's identical pattern) apply it once local tau reaches the SAME threshold the live no-contact
  // trigger uses, so the cut always lands at the same visual instant the ball actually reaches the plate on this screen, latency aside.
  if(!d.contacted){netPendingResult=d;return}
+ // v392b: a real report -- "got the result of ground out sent back to the pitcher on iphone and then saw the pitch and swing behind that
+ // result overlay that had already come up... it can get further out of sync and not sit on a standard latency". Root cause: the comment just
+ // above assumes applyNetContact()/startNetHit() has ALREADY put us into our own local 'hit' flight (st==='hit') by the time 'result' gets
+ // here -- true on an ordinary connection, but 'contact' and 'result' are two SEPARATE network events, sent moments apart on the batting side,
+ // and nothing guarantees the first actually arrives/gets consumed here before the second does -- especially on a connection bad enough to
+ // already be "further out of sync" than usual (the exact case being reported). When 'result' lands while st is STILL 'windup'/'pitch' (our own
+ // local pitch hasn't even reached contact yet, or 'contact' is sitting unconsumed in netPendingContact), applying it right here jumps straight
+ // to the GROUND OUT text while the pitch/swing animation is still playing out underneath/after it. Stash it the same way a take already is, and
+ // let tick()'s own scheduling check (right next to netPendingContact's own) hold it until OUR OWN local contact has actually happened.
+ if(st!=='hit'){netPendingResult=d;return}
  applyNetResultNow(d);
 }
 function applyNetResultNow(d){ // spectator only -- the actual state-transition half of applyNetResult() above, fired either immediately (a
@@ -3901,8 +3931,17 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  // v365: apply a pending no-contact 'result' at the exact same local threshold the live no-contact trigger a few lines down uses (P.T+0.25) --
  // see applyNetResult()'s own comment for why this is staged rather than applied the instant the network message arrives. The `else` safety net
  // covers the rare case st somehow already moved on (st won't be 'windup'/'pitch' then) before this had a chance to fire naturally.
+ // v392b: a CONTACTED pending result (see applyNetResult()'s own comment) needs a DIFFERENT readiness check than a take -- there's no ball
+ // still "flying toward the plate" to wait on, there's our own local contact (st==='hit', set by startNetHit() just above once netPendingContact
+ // is consumed) to wait on instead. Safety net: if 'contact' itself never shows up at all (lost outright, or arrives so late nothing ever flips
+ // st to 'hit'), don't wait forever -- apply the result anyway once we're comfortably past when the pitch would have resolved one way or
+ // another (P.T+2 is generous even for the slowest realistic swing+contact decision window); P itself being gone (pitch already resolved some
+ // other way) also falls through to applying it immediately, since there's nothing better left to wait on.
  if(iAmSpectating&&netPendingResult){
-  if((st==='windup'||st==='pitch')&&P&&now-tRel<P.T+0.25){/* not yet -- let it keep flying */}
+  if(netPendingResult.contacted){
+   if(st!=='hit'&&P&&now-tRel<P.T+2){/* not yet -- our own local contact hasn't happened */}
+   else{applyNetResultNow(netPendingResult);netPendingResult=null}
+  }else if((st==='windup'||st==='pitch')&&P&&now-tRel<P.T+0.25){/* not yet -- let it keep flying */}
   else{applyNetResultNow(netPendingResult);netPendingResult=null}
  }
  if(st==='pitch'){const tau=now-tRel;const p=pos(Math.min(tau,P.inZ?P.T:P.T+0.25));ball.position.copy(p);shd.position.set(p.x,0.015,p.z);if(p.z>-4)path.push([p.x,p.z]);
