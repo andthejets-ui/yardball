@@ -434,7 +434,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v396'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v397'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2794,6 +2794,10 @@ let netLatencyEstMs=NET_DELAY_MIN*1000; // v390: rolling estimate of real one-wa
 // on a single slow event, since a pitch's worth of buffer has to be sized for the next (unknown) packet, not the average of ones already survived.
 let netLatencyLastFedAt=0; // v394c: see feedLatencySample()'s own comment -- decay is now based on REAL ELAPSED TIME since the last sample, not
 // on how many samples have arrived, so this tracks when that was.
+let netWakeGraceUntil=0; // v397: see visibilitychange's own comment -- a wall-clock (Date.now()) deadline. Every feedLatencySample() call site
+// (seq-based AND both skew-free RTT ones) skips feeding while Date.now() is still before this, not just once on the first reading after waking --
+// a whole BACKLOG of queued events can land together right after a real lock-screen/background pause, and every one of them has this same
+// "looks like huge latency, is actually just us having been asleep" shape, not only the first.
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
  // skew-FREE: both timestamps it compares are this device's own clock, so a disagreeing iPhone/PC clock can't hide a real slow connection from
@@ -2832,6 +2836,7 @@ function olReset(){
  netPendingAdvance=false; // v393d: same reasoning -- don't let a stashed-but-never-consumed early advance from a previous match bleed into the next one
  pitchChosenSentAt=0; // v394: same reasoning -- don't let a never-echoed humanPitchChosen timestamp from a previous match bleed into the next one
  netPendingHumanPitch=null; // v395: same reasoning -- don't let a stashed-but-never-consumed early pitch choice from a previous match bleed into the next one
+ netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -2936,7 +2941,9 @@ function processNetEvLog(evLog){ // v321: evLog is an append-only array (see YB_
  const mine=evLog.filter(e=>e&&e.from!==olRole&&e.seq>lastEvSeq).sort((a,b)=>a.seq-b.seq);
  if(mine.length)console.log('[wiffleball net] queuing '+mine.length+' new event(s):',mine.map(e=>e.type+'#'+e.seq).join(' | '),'(lastEvSeq was',lastEvSeq,')');
  for(const e of mine){
-  lastEvSeq=e.seq;netEvQueue.push(e);
+  lastEvSeq=e.seq;e._obs=performance.now()/1000;netEvQueue.push(e);
+  // v397: stamp the moment THIS event was first observed (on OUR OWN clock) -- see applyNetPitchStart()/applyNetAdvanceAck()'s own comments for
+  // why their skew-free RTT samples need this instead of the time they actually get applied.
   // v390: measure REAL one-way latency for free off every event's own seq (the sender's Date.now() at send time -- see netSend()'s own comment).
   // Measured the instant an event is first OBSERVED here, not when drainNetEvQueue() eventually gets around to applying it -- that part is
   // deliberately paced/delayed on purpose (see its own comment) and would make the connection look far worse than it actually is. Clamped to a
@@ -2950,7 +2957,10 @@ function processNetEvLog(evLog){ // v321: evLog is an append-only array (see YB_
   // a SECOND, clock-skew-FREE measurement -- see its own comment and the advance/ack round trip that supplies it -- specifically to catch a
   // connection exactly like that, which this seq-based reading alone could systematically never see.
   const lat=Date.now()-e.seq;
-  if(lat>=0&&lat<15000)feedLatencySample(lat);
+  // v397: see netWakeGraceUntil's own comment (visibilitychange) -- a BACKLOG of several entries delivered together right after this client wakes
+  // from a real lock-screen/background pause has this exact same shape (every one of them legitimately WAS sent seconds or minutes ago, while we
+  // were asleep -- that's not network latency, it's us not having been running), so skip feeding any of them in during the post-wake grace window.
+  if(lat>=0&&lat<15000&&Date.now()>=netWakeGraceUntil)feedLatencySample(lat);
  }
  drainNetEvQueue();
 }
@@ -3027,7 +3037,7 @@ async function netSend(type,data){
  window.YB_FB.sendEvent(olMatchCode,stripUndefined({seq:evSeqCounter,from:olRole,type,data}));
 }
 function handleNetEvent(ev){
- if(ev.type==='pitchStart')applyNetPitchStart(ev.data);
+ if(ev.type==='pitchStart')applyNetPitchStart(ev.data,ev._obs); // v397: ev._obs threaded through -- see applyNetPitchStart()'s own comment
  else if(ev.type==='swing')applyNetSwing(ev.data);
  else if(ev.type==='checkSwing')applyNetCheckSwing();
  else if(ev.type==='contact')applyNetContact(ev.data);
@@ -3035,7 +3045,7 @@ function handleNetEvent(ev){
  else if(ev.type==='halfFlip')applyNetSnapshot(ev.data.state); // v319: just the state mirror -- no pitch/windup to set up, the next pitchStart (now correctly sent by whichever side this flip just put on the hook) will do that
  else if(ev.type==='gameOver')applyNetGameOver(ev.data);
  else if(ev.type==='advance')applyNetAdvance();
- else if(ev.type==='advanceAck')applyNetAdvanceAck();
+ else if(ev.type==='advanceAck')applyNetAdvanceAck(ev._obs); // v397: ev._obs threaded through -- see applyNetAdvanceAck()'s own comment
  else if(ev.type==='humanPitchChosen')applyNetHumanPitchChosen(ev.data);
  else if(ev.type==='loadStart')applyNetLoadStart();
 }
@@ -3075,6 +3085,16 @@ function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one
  // instant that happens, so stashing unconditionally here is safe -- a genuinely stale leftover gets overwritten by the next real pitch choice
  // long before it would ever matter, and is cleared outright on leaving online mode (see olReset()).
  if(st!=='wait'){netPendingHumanPitch=d;return}
+ // v397: a real report -- "the pitcher had to request to throw a pitch twice... the second one was hit as a home run, and once I cleared that
+ // hit result, another pitch was thrown right away, almost like it had queued that other pitch". Root cause: this immediate-apply branch never
+ // checked whether something was ALREADY sitting in netPendingHumanPitch from an earlier attempt before throwing the new one -- a resend (the
+ // pitcher's second "request to throw" after the first one appeared to do nothing, because it legitimately got stashed per the branch above) can
+ // easily arrive and find st now ===  'wait', taking this immediate path -- while the FIRST attempt's own stash is still sitting there, never
+ // consumed, never cleared. It then fires again later, completely on its own, the instant continuePress() next reaches 'wait' -- exactly "another
+ // pitch thrown right away" after dismissing a result that had nothing to do with it. A pitch choice that's actually able to apply RIGHT NOW
+ // necessarily supersedes anything still stashed from before (that old one is definitionally stale the moment a newer one gets through) -- so
+ // clear it here too, the same defensive habit startPitch()'s own per-pitch cleanup and olReset() already apply to every sibling netPending* var.
+ netPendingHumanPitch=null;
  startPitch(performance.now()/1000,{type:TYPES[d.tIdx],tx:d.tx,ty:d.ty});
 }
 function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-clearing -- see its comment for why this exists as its own instant event
@@ -3114,7 +3134,7 @@ function applyNetAdvanceNow(){ // the actual transition, pulled out of applyNetA
  // regardless of how fast or slow the batter was.
  tNext=performance.now()/1000+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN);
 }
-function applyNetAdvanceAck(){
+function applyNetAdvanceAck(obsAt){
  // v390b: a free, clock-skew-FREE round-trip measurement -- advLastSentAt was stamped with OUR OWN performance.now() at send time (continuePress()
  // or tick()'s own resend loop), and we're reading it back against OUR OWN performance.now() again right here -- no other device's clock is
  // involved anywhere in this calculation, unlike processNetEvLog()'s own seq-based reading (see feedLatencySample()'s own comment for why that
@@ -3122,9 +3142,18 @@ function applyNetAdvanceAck(){
  // round trip and feed half of it in as a one-way sample -- if a resend happened to be the one that actually got acked, this slightly
  // overestimates the true RTT (we're measuring from an earlier send than the one whose ack this is), which only makes the buffer a bit more
  // generous, never less -- the safe direction to be wrong in.
+ // v397: a real report of staying out of sync for a stretch even with no lock-screen/backgrounding involved at all -- root cause: this used to
+ // measure against performance.now() taken HERE, i.e. at the moment drainNetEvQueue() finally gets around to APPLYING this event -- but that's
+ // deliberately paced (see drainNetEvQueue()'s own comment, 900ms/150ms gaps between queued events specifically so a caught-up spectator still
+ // sees things play out one at a time instead of snapping straight to the end of a backlog). Any of that artificial pacing sitting ahead of this
+ // 'advanceAck' in the queue got silently counted as if it were real network time, inflating the very estimate this measurement exists to keep
+ // honest -- exactly backwards, and worse the more eventful a previous pitch was (more queued events ahead of this one -- a long hit flight's
+ // own contact+result, say). Use obsAt (stamped the instant this event was first OBSERVED, in processNetEvLog(), before any pacing) instead --
+ // the same fix applyNetPitchStart() gets for its own identical RTT measurement, and the same principle processNetEvLog()'s OWN seq-based
+ // reading already followed from the start (see its own comment).
  if(advPendingSince){
-  const rtt=performance.now()/1000-advLastSentAt;
-  if(rtt>=0&&rtt<15)feedLatencySample(rtt*500);
+  const rtt=(obsAt||performance.now()/1000)-advLastSentAt;
+  if(rtt>=0&&rtt<15&&Date.now()>=netWakeGraceUntil)feedLatencySample(rtt*500);
  }
  advPendingSince=0;
 } // v390: batting-client only -- the other side just confirmed it actually received (and, the first
@@ -3140,7 +3169,7 @@ function applyNetGameOver(d){ // v319: mirrors endGame()'s own UI update -- the 
  $('goInnings').textContent=extras?'In Extras':d.playedInnings+(d.playedInnings===1?' inning played':' innings played');
  $('gameOverScreen').classList.remove('hidden');
 }
-function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s state-setup exactly, minus the RNG/pitch-generation itself (d already
+function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'s state-setup exactly, minus the RNG/pitch-generation itself (d already
  // carries the resolved numbers) and minus the counters startPitch() bumps itself (pc/pcRed/pcBlue -- those arrive pre-bumped in d.state instead)
  // v364: fully generic again -- a human-chosen pitch (applyNetHumanPitchChosen() having called the real startPitch() on the batting side) is now
  // completely indistinguishable from a CPU pitch by the time it gets here, so the special-casing v356b-v363 needed (recognizing and absorbing
@@ -3171,7 +3200,17 @@ function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s stat
  // v394: if WE (the pitcher) just sent 'humanPitchChosen' and this 'pitchStart' is its own echo coming back, feed the round trip in as a
  // skew-free sample BEFORE computing our own tRel just below -- see commitHumanPitch()'s own comment for why this exists. A CPU-pitched or
  // offline-originated pitchStart never set pitchChosenSentAt, so this is correctly a no-op for those.
- if(pitchChosenSentAt){const rtt=now-pitchChosenSentAt;if(rtt>=0&&rtt<15)feedLatencySample(rtt*500);pitchChosenSentAt=0}
+ // v397: a real report -- latency staying inflated "for a while" even outside any lock-screen/backgrounding case at all, worse right after an
+ // eventful previous pitch (a long hit flight, say). Root cause: `now` above is performance.now() taken HERE, i.e. the moment drainNetEvQueue()
+ // finally gets around to actually APPLYING this event -- but that's deliberately paced (see drainNetEvQueue()'s own 900ms/150ms gaps between
+ // queued events, specifically so a caught-up spectator still sees things play out one at a time instead of snapping straight to the end of a
+ // backlog). Any of that artificial pacing sitting ahead of 'pitchStart' in the queue -- entirely possible right after a busy previous pitch left
+ // several events (contact/result/advance) still draining -- got silently counted as if it were real network time, inflating the very estimate
+ // this measurement exists to keep honest. Use obsAt (stamped the instant this event was first OBSERVED, in processNetEvLog(), before any
+ // pacing) instead -- the same principle processNetEvLog()'s OWN seq-based reading already followed from the start (see its own comment).
+ // Also gated on netWakeGraceUntil -- see visibilitychange's own comment -- a round trip that spanned this device's own lock-screen/background
+ // pause is the exact same "not real network time" problem, just caused by sleep instead of pacing.
+ if(pitchChosenSentAt){const rtt=(obsAt||now)-pitchChosenSentAt;if(rtt>=0&&rtt<15&&Date.now()>=netWakeGraceUntil)feedLatencySample(rtt*500);pitchChosenSentAt=0}
  tRel=now+C.WIND+3/30+netLatencyEstMs/1000;st='windup'; // v390: was the fixed NET_DELAY guess -- see its own comment (now NET_DELAY_MIN/MAX) for why this now tracks real measured latency instead
  // v392: our own windup is starting RIGHT NOW -- if the batter already told us (via applyNetLoadStart()'s own stash) that they started loading
  // before this moment even arrived, begin this pitch already in the loaded stance instead of idle, exactly matching what actually happened on
@@ -3907,7 +3946,16 @@ document.addEventListener('visibilitychange',()=>{
  // blip isn't what this is guarding against), and only back to the floor, not to zero -- the very next real sample still jumps it right back up
  // immediately if the connection genuinely is slow, same as ever; this just stops one stale resume-burst reading from being trusted as if it
  // were that.
- if(docHiddenAt&&performance.now()/1000-docHiddenAt>2)netLatencyEstMs=NET_DELAY_MIN*1000;
+ // v397: a real report -- "pitches are all more than a second maybe 2 behind" after exactly this kind of lock-screen pause, i.e. this reset alone
+ // didn't hold. Root cause: resetting ONCE, right here, only protects against a SINGLE stale reading landing after it -- but Firestore's own
+ // listener typically delivers the whole backlog that piled up while hidden as one burst the moment it reconnects, which can easily be SEVERAL
+ // evLog entries at once (processNetEvLog()'s own loop feeds a seq-based sample for every single one of them), each one individually reflecting
+ // most of the hidden duration, each one capable of slamming netLatencyEstMs right back up after this line already put it back at the floor.
+ // Give it a real grace window instead of a one-shot reset -- every feedLatencySample() call site now also checks netWakeGraceUntil (its own
+ // comment) and skips feeding entirely while still inside it, so however many stale backlog readings land in the first few seconds after waking,
+ // none of them can corrupt the estimate; the very next GENUINE sample after the window closes still jumps it right back up immediately if the
+ // connection really is slow, same as ever.
+ if(docHiddenAt&&performance.now()/1000-docHiddenAt>2){netLatencyEstMs=NET_DELAY_MIN*1000;netWakeGraceUntil=Date.now()+4000}
  docHiddenAt=0;
 });
 addEventListener('pointerdown',audioInit,{once:true});addEventListener('keydown',audioInit,{once:true});
