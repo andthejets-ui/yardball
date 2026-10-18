@@ -314,7 +314,7 @@ exactly the "floats up to the top-left" bug. */
 import {initializeApp} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
 import {getFirestore,doc,setDoc,getDoc,updateDoc,onSnapshot,serverTimestamp,arrayUnion} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 const firebaseConfig={
- apiKey:"AIzaSyCEvCuIhR6RPeKMg2Og13BuFQx_E2TDTJ0",
+ apiKey:"AIzaSyANES68mDY9-IWt8SJAMzHA9tKNT-mo30Q", // v387: rotated after the old key was publicly flagged by GitHub secret scanning; now also referrer-restricted to this site in Cloud Console
  authDomain:"yard-ball.firebaseapp.com",
  projectId:"yard-ball",
  storageBucket:"yard-ball.firebasestorage.app",
@@ -385,7 +385,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v386'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v387'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -2875,6 +2875,15 @@ function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one
 }
 function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-clearing -- see its comment for why this exists as its own instant event
  $('msg').textContent='';$('sub').textContent='';holdNext=false;ball.position.y=-9;shd.position.y=-9;st='wait';
+ // v387: this used to leave tNext completely untouched -- the only thing that HAD set it was applyNetResultNow()'s own `tNext=now+1.8` (how long
+ // the result stays up), anchored to when the RESULT arrived, not to when 'advance' does. tick()'s own auto-pitch-trigger gates purely on
+ // `now>=tNext`, so a defending Hit & Pitch player's next pick phase ended up gated behind whatever was left of that unrelated 1.8s timer --
+ // stuck waiting out the remainder of it if the batter continued quickly, or opening with NO idle pause at all if the batter took long enough
+ // that the stale timer had already elapsed. Either way the gap before the pitcher could pick again depended on how long the batter took to
+ // read the result, instead of being the same short beat every time -- exactly the "getting a bit out of sync, not as smooth" report. Re-anchor
+ // it here, the same way continuePress() itself does for the batting client, so the defending client's own next-pitch timing is consistent
+ // regardless of how fast or slow the batter was.
+ tNext=performance.now()/1000+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN);
 }
 function applyNetGameOver(d){ // v319: mirrors endGame()'s own UI update -- the spectator never ran endGame() itself (it has no local score logic to
  // trust), so this is spelled out the same way rather than recomputing winner/extras locally from (now-synced) scoreRed/scoreBlue.
