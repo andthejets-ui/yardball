@@ -233,6 +233,18 @@ exactly the "floats up to the top-left" bug. */
 #poCompass .poDirCell.pick{background:#2c7;color:#002}
 #poCompass .poDirCell.poCenter{background:transparent;border:0}
 #poAim{margin-top:4px;display:flex;flex-direction:column}
+#poCompass.hidden,#poAim.hidden{display:none} /* v390c fix: SAME specificity bug as the #olHostPane/#olJoinPane v372 fix above and the .ssPanel/
+ .olPickWrap/.olPitchRow v372/v373 fixes elsewhere in this file -- an ID selector (#poCompass{display:grid...}, #poAim{display:flex...} just
+ above) always beats a class selector's specificity regardless of source order, so renderPitcherOverlay()'s own
+ `$('poCompass').classList.toggle('hidden',!picking);$('poAim').classList.toggle('hidden',picking);` (meant to show exactly one of the two
+ sections at a time -- see poStep's own v390 step-indicator comment) was toggling a class that the bare .hidden{display:none} rule could never
+ actually win against either of these two elements' own ID rules. Both sections were visible THE WHOLE TIME regardless of step, stacked one atop
+ the other inside the overlay's own max-height/overflow-y:auto box (see #poAim's surrounding comment) -- which is exactly the reported "still
+ seeing about 3 quarters of the pitch location part... when just at pitch type select, and then when you select pitch type, it shifts down and
+ shows the bottom last quarter" (the compass taking the top of the box, aim/meter spilling out the bottom scroll-clipped at pick time; locking in
+ a pitch adds the aim content without ever actually removing the compass, pushing the now-still-present compass+aim combo further down so only
+ the tail end of the meter remains in view). These two explicit ID+class overrides (specificity 1,1,0, same trick the earlier fixes already use)
+ finally let the hidden class win, so pick time shows ONLY the compass and aim time shows ONLY the location/meter, exactly as intended. */
 #poTypeLabel{font-weight:800;color:#ffd23f;margin-bottom:4px;order:0}
 #poAimZone{order:1}
 #poLoadMeter{order:2}
@@ -415,7 +427,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v390'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v391'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2722,7 +2734,7 @@ let advPendingSince=0,advLastSentAt=0,advResendCount=0; // v390: see continuePre
 let oppHitAndPitch=false; // v356: the OPPONENT's own Hit & Pitch choice (read from the match doc, written once at host/join time -- see
 // olHostMatch()/olJoinMatch()'s watch callbacks and hostMatch()/joinMatch()'s own new argument) -- myTeam() is fixed for the whole match, so
 // "the opponent" always means the same physical player regardless of which side is currently batting; no need to track it per-side.
-const NET_DELAY_MIN=0.22,NET_DELAY_MAX=1.6; // v390: NET_DELAY used to be one fixed guess (0.22s, "comfortably above typical Firestore round-trip
+const NET_DELAY_MIN=0.22,NET_DELAY_MAX=3.0; // v390b: NET_DELAY used to be one fixed guess (0.22s, "comfortably above typical Firestore round-trip
 // latency" -- but never actually measured against a real one). That's fine on two fast machines on the same network (confirmed: two PC browser
 // tabs stay in sync), but a connection with real higher/more-variable latency -- an iPhone on cellular, or just subject to iOS's more aggressive
 // background throttling of network/timers even while the tab is technically active -- can easily exceed a flat 220ms, especially across the
@@ -2730,11 +2742,24 @@ const NET_DELAY_MIN=0.22,NET_DELAY_MAX=1.6; // v390: NET_DELAY used to be one fi
 // happens, the spectating/pitching side's local windup+flight animation (which runs on a pure local clock, independent of whether the data has
 // actually arrived) finishes BEFORE the real contact/result packet shows up -- exactly "you see the pitch finish delivering and then it's hit
 // after that". Fixed by measuring real latency instead of guessing it (see netLatencyEstMs below) and clamping the result to this range: never
-// below the original 0.22s baseline (no regression on a fast connection), never above 1.6s (a genuinely dead connection should fail visibly
-// rather than the pitcher staring at a windup for a S-car-go-length pause).
+// below the original 0.22s baseline (no regression on a fast connection). The ceiling was 1.6s -- raised to 3.0s here (v390b) after a real report
+// of the pitcher still hearing/seeing the "ball reached the target" sound and only afterward seeing a double show up: between that and the
+// clock-skew fix on netLatencyEstMs's own measurement just below, a genuinely slow iPhone<->PC connection can need more than 1.6s of padding to
+// reliably beat a real contact+result round trip home. A connection bad enough to exceed even 3.0s should fail visibly rather than the pitcher
+// staring at a windup for a S-car-go-length pause.
 let netLatencyEstMs=NET_DELAY_MIN*1000; // v390: rolling estimate of real one-way network latency, updated from every event (see processNetEvLog()'s
 // own comment for how) -- not a fixed guess any more. Decays slowly back toward the baseline after a connection improves, but jumps UP immediately
 // on a single slow event, since a pitch's worth of buffer has to be sized for the next (unknown) packet, not the average of ones already survived.
+function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
+ // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
+ // skew-FREE: both timestamps it compares are this device's own clock, so a disagreeing iPhone/PC clock can't hide a real slow connection from
+ // THIS measurement even if it manages to hide it from the other one). Whichever source reports the bigger number wins immediately (the buffer
+ // for the NEXT pitch has to cover the next packet, not the average of ones already survived); decay toward the floor is now 15%/reading (was
+ // 30%) -- after a real report of the pitcher still seeing a hit resolve well after hearing the "ball reached the target" sound despite this
+ // buffer existing, a round trip that happens to land a few events after one bad spike was apparently still forgetting it too quickly, right
+ // before the one pitch that most needed the padding.
+ netLatencyEstMs=Math.min(NET_DELAY_MAX*1000,Math.max(NET_DELAY_MIN*1000,Math.max(ms,netLatencyEstMs*0.85)));
+}
 // v316: once the other side's presence flips true, the game now jumps straight
 // into the tutorial/game itself rather than just revealing a Start button someone still has to click -- being matched IS being ready here, there's
 // no separate lobby-chat step this would be protecting. olAutoStarted guards against onSnapshot firing more than once (it does, routinely) from
@@ -2857,11 +2882,16 @@ function processNetEvLog(evLog){ // v321: evLog is an append-only array (see YB_
   // Measured the instant an event is first OBSERVED here, not when drainNetEvQueue() eventually gets around to applying it -- that part is
   // deliberately paced/delayed on purpose (see its own comment) and would make the connection look far worse than it actually is. Clamped to a
   // sane window: negative (clock skew/out-of-order) or implausibly huge (tens of seconds -- almost certainly a wrong device clock, not real
-  // network latency) readings are ignored rather than corrupting the estimate. Jumps up immediately on one slow event (the buffer for the NEXT
-  // pitch has to cover the next packet, not the average of ones already survived), decays only 30%/reading back toward the floor once things
-  // improve, so a brief one-off stall can't permanently inflate it either.
+  // network latency) readings are ignored rather than corrupting the estimate.
+  // v390b: this reading ASSUMES the sender's and receiver's own device clocks agree -- e.chars.seq is the SENDER's own Date.now(), compared
+  // against OUR Date.now(). Two devices that have never been clock-synced (an iPhone and a PC, say) can easily disagree by hundreds of ms, in
+  // either direction, for reasons that have nothing to do with the network at all -- and if the skew happens to make this side's clock read
+  // AHEAD of the sender's, every reading here comes back artificially LOW (or even negative, silently discarded by the lat>=0 check below),
+  // quietly under-buffering this exact direction regardless of how slow the real network actually is. feedLatencySample() below is now also fed
+  // a SECOND, clock-skew-FREE measurement -- see its own comment and the advance/ack round trip that supplies it -- specifically to catch a
+  // connection exactly like that, which this seq-based reading alone could systematically never see.
   const lat=Date.now()-e.seq;
-  if(lat>=0&&lat<15000)netLatencyEstMs=Math.min(NET_DELAY_MAX*1000,Math.max(NET_DELAY_MIN*1000,Math.max(lat,netLatencyEstMs*0.7)));
+  if(lat>=0&&lat<15000)feedLatencySample(lat);
  }
  drainNetEvQueue();
 }
@@ -2994,7 +3024,20 @@ function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-cleari
  // regardless of how fast or slow the batter was.
  tNext=performance.now()/1000+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN);
 }
-function applyNetAdvanceAck(){advPendingSince=0} // v390: batting-client only -- the other side just confirmed it actually received (and, the first
+function applyNetAdvanceAck(){
+ // v390b: a free, clock-skew-FREE round-trip measurement -- advLastSentAt was stamped with OUR OWN performance.now() at send time (continuePress()
+ // or tick()'s own resend loop), and we're reading it back against OUR OWN performance.now() again right here -- no other device's clock is
+ // involved anywhere in this calculation, unlike processNetEvLog()'s own seq-based reading (see feedLatencySample()'s own comment for why that
+ // one can be fooled by two devices whose clocks simply disagree, iPhone vs PC being exactly the case that prompted this). Treat it as a real
+ // round trip and feed half of it in as a one-way sample -- if a resend happened to be the one that actually got acked, this slightly
+ // overestimates the true RTT (we're measuring from an earlier send than the one whose ack this is), which only makes the buffer a bit more
+ // generous, never less -- the safe direction to be wrong in.
+ if(advPendingSince){
+  const rtt=performance.now()/1000-advLastSentAt;
+  if(rtt>=0&&rtt<15)feedLatencySample(rtt*500);
+ }
+ advPendingSince=0;
+} // v390: batting-client only -- the other side just confirmed it actually received (and, the first
 // time, applied) our 'advance'. Stops continuePress()'s resend loop (see tick()'s own check) from sending any more copies of it.
 function applyNetGameOver(d){ // v319: mirrors endGame()'s own UI update -- the spectator never ran endGame() itself (it has no local score logic to
  // trust), so this is spelled out the same way rather than recomputing winner/extras locally from (now-synced) scoreRed/scoreBlue.
