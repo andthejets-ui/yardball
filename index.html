@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v405'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v406'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2847,8 +2847,9 @@ let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // 
 // between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
 // echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
 // unchanged field don't re-send an echo or re-feed the same sample over and over.
-let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1,netPendingSwingDbg=null,netHitIncomingPath=null; // v405: netHitIncomingPath -- see startNetHit()'s
-// own comment for why the incoming pitch trajectory has to be grabbed there, before it's wiped, rather than read later off the live `path`.
+let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1,netPendingSwingDbg=null,netHitIncomingPath=null,awaitingLateSwingDbg=false; // v406:
+// awaitingLateSwingDbg -- see processSwingDbg()'s own comment for the real report and why this specific window has to exist. v405:
+// netHitIncomingPath -- see startNetHit()'s own comment for why the incoming pitch trajectory has to be grabbed there, before it's wiped, rather than read later off the live `path`.
 // v403b: netPendingSwingDbg -- see processSwingDbg()'s own comment for
 // why the received payload is stashed here rather than applied immediately; swingDbgSeqCounter is OUR OWN incrementing
 // counter (a plain overwritten object comes back as a brand-new JS object on every snapshot, never reference-equal, so a seq number is the only
@@ -2948,11 +2949,24 @@ function processSwingDbg(data,peerRole){ // v403b: called from both olHostMatch(
  if(!d||d.seq===lastPeerSwingDbgSeq)return;
  lastPeerSwingDbgSeq=d.seq;
  netPendingSwingDbg=d;
+ // v406: a real report -- "it may have been the 2nd pitch of the bot of 1st... I didn't see the result come in. But then on the next hit, it
+ // worked." Root cause: this write and the actual 'result' event are two separate, independently-timed network writes (deliberately, so this
+ // can never show BEFORE the real outcome -- see this function's own comment above), but that cuts both ways: applyNetResultNow() only ever
+ // checks ONCE, at the instant the result itself reveals, whether anything is stashed here yet. If this write happens to still be in flight at
+ // that exact instant (plausible any time the connection has a brief slow patch -- the exact kind of moment v400's swing-drop bug also hit,
+ // right around a burst of other writes), that one check finds nothing, gives up, and nothing is listening for this data ever again -- even
+ // though it's still genuinely coming, a moment later. awaitingLateSwingDbg (set by applyNetResultNow() only when that one check came up empty)
+ // is exactly that "still listening" window: if this is what we were waiting for, apply it right now instead of just stashing it for a reveal
+ // that's already happened and isn't coming back. This can still only ever show AFTER the real result (never before -- the whole point is
+ // preserved), just not strictly AT it. applyNetPitchStart() closes this window the instant the next pitch starts, so a payload that takes even
+ // longer than that to arrive is correctly given up on rather than ever getting misapplied to the wrong (next) pitch.
+ if(awaitingLateSwingDbg){awaitingLateSwingDbg=false;applyPendingSwingDbg()}
 }
-function applyPendingSwingDbg(){ // v403b: the actual reveal, called only from applyNetResultNow() (see processSwingDbg()'s own comment for why
- // it has to be there and nowhere earlier) -- turns the stashed payload into the same snap/resLines shape the real batter's own tryContact()/
- // showDbg() would have produced, at the exact instant the spectator's own screen is first allowed to show this pitch's outcome at all.
- if(!netPendingSwingDbg)return;
+function applyPendingSwingDbg(){ // v403b: the actual reveal, called from applyNetResultNow() (see processSwingDbg()'s own comment for why it has
+ // to be there and nowhere earlier) and, v406, from processSwingDbg() itself for a late arrival -- see its own comment. Turns the stashed
+ // payload into the same snap/resLines shape the real batter's own tryContact()/showDbg() would have produced. Returns whether it actually
+ // found anything to reveal, so applyNetResultNow() knows whether to keep listening for a late arrival.
+ if(!netPendingSwingDbg)return false;
  const d=netPendingSwingDbg;netPendingSwingDbg=null;
  // v405: for a HIT, use the incoming-pitch snapshot startNetHit() grabbed BEFORE contact wiped `path` for the exit flight -- see its own comment.
  // Reading the live `path` here instead (as this line first did) would always get the exit trail, not the incoming one -- see that same comment.
@@ -2962,6 +2976,7 @@ function applyPendingSwingDbg(){ // v403b: the actual reveal, called only from a
  netHitIncomingPath=null;
  snap=d.hasSwing?{a:d.a,path:pitchPath,ball:[d.bx,d.bz],hit:d.hit}:null;
  resLines=d.lines||[];
+ return true;
 }
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
@@ -3004,7 +3019,7 @@ function olReset(){
  netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
- swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null;netHitIncomingPath=null; // v403/v403b/v405: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload/path snapshot bleed into the next one
+ swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false; // v403/v403b/v405/v406: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload/path snapshot/late-arrival window bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -3363,9 +3378,12 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  P={t,sp:d.sp,T:d.T,a:new THREE.Vector3(d.a.x,d.a.y,d.a.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),ph:d.ph,tx:d.tx,ty:d.ty,inZ:d.inZ};
  if(d.kx){P.kx=d.kx;P.ky=d.ky;P.dxT=d.dxT;P.dyT=d.dyT}
  const now=performance.now()/1000;
- stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null;netHitIncomingPath=null; // v403b/v405: don't let a
+ stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false; // v403b/v405: don't let a
  // stale, never-consumed swing-debug payload (or its incoming-path snapshot) from a previous pitch bleed into this one -- applyNetResultNow()
- // should always consume it first in practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own equivalents here.
+ // should always consume it first in practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own
+ // equivalents here. v406: this is ALSO what closes the "still listening for a late arrival" window from the previous pitch (see
+ // processSwingDbg()'s own comment) -- a payload that takes even longer than this to show up is correctly given up on here, rather than ever
+ // getting misapplied to THIS (wrong) pitch once it finally does arrive.
  contacted=missed=false;swungFor=false;landed=false;first=null;maxD=0;crossed=null;peak=0;fairDec=null;trk.length=0;swinging=false;
  // v402: a real report -- "on the pitcher's machine, a swing and a miss leaves the white trail on screen until the next pitch, and a line draws
  // from the previous hit ball's position to the pitcher before the new trajectory draws -- like it's showing the path it took to warp from the
@@ -3537,7 +3555,9 @@ function applyNetResultNow(d){ // spectator only -- the actual state-transition 
  applyNetSnapshot(d.state);
  // v403b: reveal whatever swing/contact debug data arrived for this pitch at the exact same instant the result itself becomes visible, not
  // before -- see processSwingDbg()'s own comment for the full reasoning (the old "saw the pitch/mph before the pitch arrived" bug class).
- applyPendingSwingDbg();
+ // v406: this is only ever checked ONCE, right here -- if the data hasn't actually arrived yet (still in flight), there was nothing this line
+ // could do about that on its own. awaitingLateSwingDbg is what keeps listening past this one check -- see processSwingDbg()'s own comment.
+ awaitingLateSwingDbg=!applyPendingSwingDbg();
  $('msg').textContent=d.msg||'';$('msg').style.color=d.col||'#fff';$('sub').textContent=d.sub||'';
  // v332: don't force `swinging` off here either -- same reasoning as startNetHit() above. A quick-settling play (e.g. a routine grounder) can have
  // its 'result' event arrive well before the swing's own natural duration (tick()'s `ts+C.SW+0.45` timeout) has elapsed, so forcing it false here
