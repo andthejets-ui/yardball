@@ -434,7 +434,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v394'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v396'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1417,6 +1417,16 @@ function commitHumanPitch(hold){ // v352/v364: release COMMITS the outcome (accu
   // two lines above this) before the real pitchStart echo had any chance to arrive. See applyNetPitchStart()'s own defensive hide below for why
   // that premature reopen then had nothing left to ever close it again.
   tNext=performance.now()/1000+3;
+  // v394: a clock-skew-FREE latency sample, same idea as continuePress()'s own advPendingSince/applyNetAdvanceAck() round trip -- but that one
+  // only ever runs on the BATTER's device (only the batter ever sends 'advance'), so the PITCHER's own netLatencyEstMs (the one that actually
+  // governs how generous THEIR windup buffer is, see applyNetPitchStart()'s own tRel line) had no skew-free source at all -- it relied entirely
+  // on processNetEvLog()'s seq-based measurement, which trusts the SENDER's device clock and can be silently starved (readings discarded by the
+  // `lat>=0` guard, or just systematically under-measured) if the two devices' clocks disagree in the wrong direction. humanPitchChosen->pitchStart
+  // is itself a real round trip initiated by the pitcher (defender sends the pitch choice, the batting client immediately runs the real
+  // startPitch() and echoes 'pitchStart' straight back) -- timing it the same way gives the pitcher a genuine, skew-free RTT sample every single
+  // pitch, not just the batter. This likely explains "it's definitely more delayed when iPhone is pitcher": whichever side's clock sits on the
+  // unlucky side of the skew never got a second chance to self-correct before now.
+  pitchChosenSentAt=performance.now()/1000;
   netSend('humanPitchChosen',{tIdx:TYPES.indexOf(type),tx,ty});
   return;
  }
@@ -1773,6 +1783,15 @@ function continuePress(src){ // the dedicated "advance past a result" input (B /
  ball.position.y=-9;shd.position.y=-9;
  kidPitcherIdleT=0; // fresh idle phase -- a clean "ready" pose instead of wherever the post-swing settle happened to leave off
  st='wait';tNext=n+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN);
+ // v395: "the pitcher selects their pitch and it stays queued until after the batter swings" -- applyNetHumanPitchChosen() used to require
+ // st==='wait' and SILENTLY DROP the opponent's pitch choice otherwise (no stash at all, the one place in this whole file that still worked that
+ // way). Once the defending player's own screen clears its result and reaches pitchPick faster than the batter dismisses theirs (exactly what
+ // the earlier fixes this session made more likely, by unsticking the defender faster), 'humanPitchChosen' can genuinely arrive here BEFORE this
+ // (the batting) client's own st has reached 'wait' yet -- and once dropped, it's gone for good (evLog's own seq-based filtering means it's
+ // never reprocessed even once we DO reach 'wait'), so nothing throws the pitch until some unrelated later action happens to paper over it.
+ // Consume any such stash the instant our OWN st actually becomes 'wait' right here, instead of requiring the defender to have somehow sent it
+ // again (they never do -- there's no resend for this event).
+ if(netPendingHumanPitch){const d=netPendingHumanPitch;netPendingHumanPitch=null;applyNetHumanPitchChosen(d)}
  // v325: previously the spectator had no idea the batter had moved past the result until the FULL next pitchStart arrived (which only fires once
  // the whole next windup is already under way) -- so it just sat on stale result text for however long the batter took to decide to continue, then
  // the idle gap, then the windup. Sending a tiny instant signal right here (the moment the batter's own screen actually clears the result) lets the
@@ -2740,6 +2759,11 @@ let netPendingLoadStart=false; // v392: see applyNetLoadStart()'s own comment fo
 // has even started needs this stashed, not dropped, the same way netPendingContact/netPendingResult already stash an early arrival.
 let advPendingSince=0,advLastSentAt=0,advResendCount=0; // v390: see continuePress()'s netSend('advance',...) call and applyNetAdvanceAck()'s own
 // comment for why 'advance' specifically needs a real acknowledgment/resend loop, unlike every other online event.
+let pitchChosenSentAt=0; // v394: see commitHumanPitch()'s own comment -- stamped when the PITCHER sends 'humanPitchChosen', read back (and
+// cleared) the moment the resulting 'pitchStart' echoes back to them, in applyNetPitchStart(), for a skew-free RTT sample of their own.
+let netPendingHumanPitch=null; // v395: see applyNetHumanPitchChosen()'s own comment -- a defender's pitch choice arriving before OUR OWN
+// (the batter's) st has reached 'wait' yet needs to be remembered, not dropped, the same way netPendingContact/netPendingResult/
+// netPendingLoadStart/netPendingAdvance already are. Consumed in continuePress(), the only place our own st actually becomes 'wait'.
 let netPendingAdvance=false; // v393d: a batter who dismisses their own result sends 'advance' the instant THEY move on -- but the v393d fix above
 // now makes US (the spectator/pitcher) correctly wait for OUR OWN local hit-flight physics to actually finish (home run hang time included)
 // before we even reach st==='result' ourselves. A fast-settling batter can easily press continue and have 'advance' land here while we're still
@@ -2768,15 +2792,28 @@ const NET_DELAY_MIN=0.22,NET_DELAY_MAX=3.0; // v390b: NET_DELAY used to be one f
 let netLatencyEstMs=NET_DELAY_MIN*1000; // v390: rolling estimate of real one-way network latency, updated from every event (see processNetEvLog()'s
 // own comment for how) -- not a fixed guess any more. Decays slowly back toward the baseline after a connection improves, but jumps UP immediately
 // on a single slow event, since a pitch's worth of buffer has to be sized for the next (unknown) packet, not the average of ones already survived.
+let netLatencyLastFedAt=0; // v394c: see feedLatencySample()'s own comment -- decay is now based on REAL ELAPSED TIME since the last sample, not
+// on how many samples have arrived, so this tracks when that was.
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
  // skew-FREE: both timestamps it compares are this device's own clock, so a disagreeing iPhone/PC clock can't hide a real slow connection from
  // THIS measurement even if it manages to hide it from the other one). Whichever source reports the bigger number wins immediately (the buffer
- // for the NEXT pitch has to cover the next packet, not the average of ones already survived); decay toward the floor is now 15%/reading (was
- // 30%) -- after a real report of the pitcher still seeing a hit resolve well after hearing the "ball reached the target" sound despite this
- // buffer existing, a round trip that happens to land a few events after one bad spike was apparently still forgetting it too quickly, right
- // before the one pitch that most needed the padding.
- netLatencyEstMs=Math.min(NET_DELAY_MAX*1000,Math.max(NET_DELAY_MIN*1000,Math.max(ms,netLatencyEstMs*0.85)));
+ // for the NEXT pitch has to cover the next packet, not the average of ones already survived).
+ // v394c: "it almost seems once out of sync, it stays in a really bad state for a while. And gets worse if I wait between pitches... We cant see
+ // a player waiting longer to press that screen as latency. They just are looking at the result or taking a break." -- the v392b fix above
+ // (decay 30%/reading -> 15%/reading) was measured in READINGS, not real time -- readings only arrive when an event actually fires, so during a
+ // fast run of quick pitches they come every second or so and the decay plays out in real time roughly the way it was tuned to, but the instant
+ // the player just sits on a result screen for a while (reading it, taking a break -- nothing hidden/backgrounded, so the v393e fix above doesn't
+ // apply either), NO new events fire at all until they finally press on -- so the decay simply doesn't run during that wait, however long it is,
+ // then "catches up" (badly) by needing just as many MORE readings afterward as it would have during fast play, which can now take minutes of
+ // real time instead of ~16 seconds. That's backwards: waiting longer should let a transient spike settle, not require more button presses before
+ // it's allowed to. Switched the decay to real elapsed wall-clock time instead of reading count -- a ~4s half-life, chosen so a normal run of
+ // same-pitch events roughly 1s apart still decays about as slowly as the old 15%-per-reading figure did (0.5^(1/4)=.84, matching it closely), but
+ // a genuine gap of 10+ seconds (a player just looking at the result, or a break) now settles back toward the floor in real time on its own,
+ // regardless of whether or how fast anything else happens next.
+ const now=performance.now()/1000,dt=netLatencyLastFedAt?Math.max(0,now-netLatencyLastFedAt):0;netLatencyLastFedAt=now;
+ const decayed=netLatencyEstMs*Math.pow(0.5,dt/4);
+ netLatencyEstMs=Math.min(NET_DELAY_MAX*1000,Math.max(NET_DELAY_MIN*1000,Math.max(ms,decayed)));
 }
 // v316: once the other side's presence flips true, the game now jumps straight
 // into the tutorial/game itself rather than just revealing a Start button someone still has to click -- being matched IS being ready here, there's
@@ -2793,6 +2830,8 @@ function olReset(){
  advPendingSince=0;advLastSentAt=0;advResendCount=0; // v390: leaving/resetting online mode -- don't let a stale resend loop from a previous match bleed into the next one
  netPendingLoadStart=false; // v392: same reasoning -- don't let a stashed-but-never-consumed early load from a previous match bleed into the next one
  netPendingAdvance=false; // v393d: same reasoning -- don't let a stashed-but-never-consumed early advance from a previous match bleed into the next one
+ pitchChosenSentAt=0; // v394: same reasoning -- don't let a never-echoed humanPitchChosen timestamp from a previous match bleed into the next one
+ netPendingHumanPitch=null; // v395: same reasoning -- don't let a stashed-but-never-consumed early pitch choice from a previous match bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -3028,8 +3067,14 @@ function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one
  // pitch immediately, right now, is the whole point of the v364 simplification: the defending client becomes a pure spectator of everything
  // that follows, through the completely ordinary (un-specialized) applyNetPitchStart() path a CPU pitch already uses -- no local throw-phase, no
  // freeze, nothing left to fall out of sync.
- if(!iAmBatting()||st!=='wait')return; // st!=='wait': a stale/out-of-order delivery (this pitch already started some other way) -- ignore, same
- // safety the normal CPU auto-start check (tick()'s own st==='wait'&&now>=tNext block) already relies on.
+ if(!iAmBatting())return; // never our concern if we're not the one batting -- no stash needed either, this client has nothing to do with it
+ // v395: st!=='wait' used to just mean "ignore this, stale/out-of-order delivery" -- true for a genuine stale duplicate (this pitch already
+ // started some other way), but ALSO true for a perfectly legitimate EARLY arrival: the defender finished picking before we'd dismissed our own
+ // previous result yet. Telling them apart the same way applyNetAdvance() already does for its own early-arrival case: 'wait' is the only state
+ // this event is ever actually ready to apply in, and continuePress() (the only place our own st becomes 'wait') now replays this stash the
+ // instant that happens, so stashing unconditionally here is safe -- a genuinely stale leftover gets overwritten by the next real pitch choice
+ // long before it would ever matter, and is cleared outright on leaving online mode (see olReset()).
+ if(st!=='wait'){netPendingHumanPitch=d;return}
  startPitch(performance.now()/1000,{type:TYPES[d.tIdx],tx:d.tx,ty:d.ty});
 }
 function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-clearing -- see its comment for why this exists as its own instant event
@@ -3123,6 +3168,10 @@ function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s stat
  netPendingAdvance=false; // v393d: same reasoning -- by the time a new pitch actually starts, our own previous result was necessarily already
  // shown and dismissed one way or another (applyNetResultNow()'s own tail already consumes this the instant it fires), so a leftover true here
  // would only ever be a stale leak, never something still legitimately waiting -- defensive, matching the sibling clears just above
+ // v394: if WE (the pitcher) just sent 'humanPitchChosen' and this 'pitchStart' is its own echo coming back, feed the round trip in as a
+ // skew-free sample BEFORE computing our own tRel just below -- see commitHumanPitch()'s own comment for why this exists. A CPU-pitched or
+ // offline-originated pitchStart never set pitchChosenSentAt, so this is correctly a no-op for those.
+ if(pitchChosenSentAt){const rtt=now-pitchChosenSentAt;if(rtt>=0&&rtt<15)feedLatencySample(rtt*500);pitchChosenSentAt=0}
  tRel=now+C.WIND+3/30+netLatencyEstMs/1000;st='windup'; // v390: was the fixed NET_DELAY guess -- see its own comment (now NET_DELAY_MIN/MAX) for why this now tracks real measured latency instead
  // v392: our own windup is starting RIGHT NOW -- if the batter already told us (via applyNetLoadStart()'s own stash) that they started loading
  // before this moment even arrived, begin this pitch already in the loaded stance instead of idle, exactly matching what actually happened on
