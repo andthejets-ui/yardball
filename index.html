@@ -299,6 +299,16 @@ exactly the "floats up to the top-left" bug. */
  #sub{font-size:clamp(12px,2vw,16px)}
  #contHint{font-size:11px}
  #netWait{font-size:12px}
+ /* v405: a real report -- "comparing the two screens... it is much bigger screen real estate wise on the iphone than it is on the PC." Same
+ root cause as v390b just above, applied to #mmwrap/#mm/#mmtext (the debug minimap): it's sized in flat px (160x160), never given any
+ responsive treatment at all, so on a short landscape phone (iPhone 14/SE, the exact devices this whole block targets) a fixed 160px square
+ eats a much bigger share of the little vertical room available than it does on a taller PC browser window -- not a difference in raw px, a
+ difference in how much of the (short) screen it occupies. #mm's canvas keeps its 160x160 drawing resolution (the width/height HTML attributes,
+ untouched) and just gets scaled down for DISPLAY here, same trick as everything else in this block -- no drawMM()/mx coordinate-math changes
+ needed. */
+ #mmwrap{width:104px}
+ #mm{width:104px;height:104px}
+ #mmtext{font-size:10px;padding:4px}
 }
 #btns{position:fixed;left:10px;top:calc(8px + env(safe-area-inset-top,0px));z-index:5;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start;max-width:calc(50vw - 170px)}
 #btns button{font-size:12px;padding:6px 10px;border-radius:6px;border:0;background:#000a;color:#fff}
@@ -465,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v404'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v405'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2837,7 +2847,9 @@ let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // 
 // between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
 // echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
 // unchanged field don't re-send an echo or re-feed the same sample over and over.
-let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1,netPendingSwingDbg=null; // v403b: netPendingSwingDbg -- see processSwingDbg()'s own comment for
+let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1,netPendingSwingDbg=null,netHitIncomingPath=null; // v405: netHitIncomingPath -- see startNetHit()'s
+// own comment for why the incoming pitch trajectory has to be grabbed there, before it's wiped, rather than read later off the live `path`.
+// v403b: netPendingSwingDbg -- see processSwingDbg()'s own comment for
 // why the received payload is stashed here rather than applied immediately; swingDbgSeqCounter is OUR OWN incrementing
 // counter (a plain overwritten object comes back as a brand-new JS object on every snapshot, never reference-equal, so a seq number is the only
 // reliable way to tell "this is the same pitch's data again" from "this is a new pitch's data"); lastPeerSwingDbgSeq is that same de-dupe guard
@@ -2942,7 +2954,13 @@ function applyPendingSwingDbg(){ // v403b: the actual reveal, called only from a
  // showDbg() would have produced, at the exact instant the spectator's own screen is first allowed to show this pitch's outcome at all.
  if(!netPendingSwingDbg)return;
  const d=netPendingSwingDbg;netPendingSwingDbg=null;
- snap=d.hasSwing?{a:d.a,path:path.slice(),ball:[d.bx,d.bz],hit:d.hit}:null;
+ // v405: for a HIT, use the incoming-pitch snapshot startNetHit() grabbed BEFORE contact wiped `path` for the exit flight -- see its own comment.
+ // Reading the live `path` here instead (as this line first did) would always get the exit trail, not the incoming one -- see that same comment.
+ // A no-contact result (miss or take) never wipes `path` at all, so the live array is still exactly the incoming trajectory there -- no snapshot
+ // needed, same as it's always been.
+ const pitchPath=d.hit&&netHitIncomingPath?netHitIncomingPath:path.slice();
+ netHitIncomingPath=null;
+ snap=d.hasSwing?{a:d.a,path:pitchPath,ball:[d.bx,d.bz],hit:d.hit}:null;
  resLines=d.lines||[];
 }
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
@@ -2986,7 +3004,7 @@ function olReset(){
  netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
- swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null; // v403/v403b: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload bleed into the next one
+ swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null;netHitIncomingPath=null; // v403/v403b/v405: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload/path snapshot bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -3345,9 +3363,9 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  P={t,sp:d.sp,T:d.T,a:new THREE.Vector3(d.a.x,d.a.y,d.a.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),ph:d.ph,tx:d.tx,ty:d.ty,inZ:d.inZ};
  if(d.kx){P.kx=d.kx;P.ky=d.ky;P.dxT=d.dxT;P.dyT=d.dyT}
  const now=performance.now()/1000;
- stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null; // v403b: don't let a
- // stale, never-consumed swing-debug payload from a previous pitch bleed into this one -- applyNetResultNow() should always consume it first in
- // practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own equivalents here.
+ stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null;netHitIncomingPath=null; // v403b/v405: don't let a
+ // stale, never-consumed swing-debug payload (or its incoming-path snapshot) from a previous pitch bleed into this one -- applyNetResultNow()
+ // should always consume it first in practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own equivalents here.
  contacted=missed=false;swungFor=false;landed=false;first=null;maxD=0;crossed=null;peak=0;fairDec=null;trk.length=0;swinging=false;
  // v402: a real report -- "on the pitcher's machine, a swing and a miss leaves the white trail on screen until the next pitch, and a line draws
  // from the previous hit ball's position to the pitcher before the new trajectory draws -- like it's showing the path it took to warp from the
@@ -3451,6 +3469,16 @@ function startNetHit(d){ // spectator only -- the actual state-transition half o
  stopPitchAudio();
  if(d.snd)playHitSound(d.snd,d.ev); // v380: the bat-crack sound the batting side already chose and sent -- see playHitSound()'s own comment for why this can't be re-derived locally
  H={p:new THREE.Vector3(d.p.x,d.p.y,d.p.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),w:new THREE.Vector3(d.w.x,d.w.y,d.w.z),launch:0,spray:0,ev:d.ev,roll:false,t:0,y0:d.y0,fenceBounced:false,wallBounced:false,treePass:false,obSound:false};
+ // v405: a real report -- "on the pitching side we're showing the exit dotted line of the hit rather than the incoming pitch dotted line the
+ // hitting side shows. Since it's about contact relative to the pitch, it's more important to show the incoming pitch to contact point." Root
+ // cause: this exact line used to just do `path.length=0` with nothing grabbed first -- the SAME `path` array doubles as both the incoming
+ // pitch's own dotted trail (pushed during tick()'s 'pitch' state) and the ball's post-contact exit trail (pushed by the shared hit-flight
+ // physics loop below, unconditional on who's batting), and this is the exact instant it switches from tracking one to tracking the other. The
+ // real batter's own tryContact() never has this problem -- it captures `path.slice()` into `snap.path` BEFORE this same kind of clear happens,
+ // at the true moment of contact -- so this grabs the identical snapshot at the identical moment here too, for applyPendingSwingDbg() to use
+ // once the result is actually revealed, instead of applyPendingSwingDbg() reading the live `path` way too late (by then already overwritten
+ // with the ball's OUTGOING flight, not the incoming pitch that led to it).
+ netHitIncomingPath=path.slice();
  contacted=true;trk.length=0;trailPts.length=0;path.length=0;
  first=null;maxD=0;crossed=null;peak=0;fairDec=null;
  st='hit';hitT=performance.now()/1000;
@@ -4402,7 +4430,16 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  drawMM();updateLeaves(dt);last=now;ren.render(sc,cam)}
 function setTrail(){const n=Math.min(trailPts.length,TN);for(let i=0;i<n;i++){const p=trailPts[i];tpos[i*3]=p.x;tpos[i*3+1]=p.y;tpos[i*3+2]=p.z}trg.attributes.position.needsUpdate=true;trg.setDrawRange(0,n)}
 const mm=$('mm'),mx=mm.getContext('2d'),X=x=>80+x*40,Z=z=>(z+4)*29;
-function drawMM(){const dA=snap?snap.a:dispA,pth=snap?snap.path:path;mx.clearRect(0,0,160,160);mx.fillStyle=snap?'#ffd23f':'#fff';mx.font='10px sans-serif';mx.fillText(snap?(snap.hit?'CONTACT':'MISS'):'TOP VIEW',6,12);
+function drawMM(){
+ // v405: a real ask -- "since it doesn't update live, the online pitcher's screen likely doesn't need to show the live pip of the overhead
+ // batting. It only needs to show up when the result comes in." Right: the "live" branch below (dispA/path/ball.position) was only ever
+ // meaningful for the real batter -- dispA is THIS screen's own bat angle, which the spectator never swings, and ball.position here is driven
+ // by their own still-unresolved local replay, not anything settled. Since v403b's own fix means `snap` genuinely never gets set for the
+ // spectator until the real result is revealed (see applyNetResultNow()/applyPendingSwingDbg()), showing the "live" branch to them in the
+ // meantime was never showing anything real anyway -- just a blank/neutral panel that looked like it should mean something. So the spectator
+ // now gets an explicit "waiting" panel instead, and only ever sees the diagram once it's the real, revealed thing.
+ if(onlineActive&&!iAmBatting()&&!snap){mx.clearRect(0,0,160,160);mx.fillStyle='#fff8';mx.font='10px sans-serif';mx.fillText('Waiting for swing...',6,12);$('mmtext').innerHTML='';return}
+ const dA=snap?snap.a:dispA,pth=snap?snap.path:path;mx.clearRect(0,0,160,160);mx.fillStyle=snap?'#ffd23f':'#fff';mx.font='10px sans-serif';mx.fillText(snap?(snap.hit?'CONTACT':'MISS'):'TOP VIEW',6,12);
  mx.fillStyle='#2a4fc9';mx.fillRect(X(-0.3),Z(ZS),24,5);
  mx.strokeStyle='#ffe14a';mx.lineWidth=4;mx.beginPath();mx.moveTo(X(HC.x),Z(C.PZ));mx.lineTo(X(HC.x+Math.sin(dA)*C.REACH),Z(C.PZ-Math.cos(dA)*C.REACH));mx.stroke();
  mx.strokeStyle='#ff3b30';mx.lineWidth=1;const sx=X(HC.x+Math.sin(dA)*C.SWEET),sz=Z(C.PZ-Math.cos(dA)*C.SWEET);mx.beginPath();mx.arc(sx,sz,3,0,6.3);mx.stroke();
