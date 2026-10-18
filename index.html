@@ -348,7 +348,7 @@ exactly the "floats up to the top-left" bug. */
 // allowed to run there). Test this by opening THIS FILE directly (e.g. a local static server, or hosted on GitHub Pages/Netlify/itch.io/Firebase
 // Hosting), not via the published claude.ai/artifact/... link.
 import {initializeApp} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
-import {getFirestore,doc,setDoc,getDoc,updateDoc,onSnapshot,serverTimestamp,arrayUnion} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
+import {getFirestore,doc,setDoc,getDoc,updateDoc,onSnapshot,serverTimestamp,arrayUnion,arrayRemove} from "https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js";
 const firebaseConfig={
  apiKey:"AIzaSyANES68mDY9-IWt8SJAMzHA9tKNT-mo30Q", // v387: rotated after the old key was publicly flagged by GitHub secret scanning; now also referrer-restricted to this site in Cloud Console
  authDomain:"yard-ball.firebaseapp.com",
@@ -427,11 +427,18 @@ window.YB_FB={
  // to be replayed in sequence and never missed) -- a ping is neither: only the LATEST value ever matters, so these are two plain overwritten
  // fields instead, same pattern 'host.present'/'join.present' already use. Each side only ever writes the field named after its OWN role,
  // exactly like every other write in this object.
- async sendPing(code,role,t){
-  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'Ping']:t})}catch(e){}
+ async sendPing(code,role,t,seenSeq){
+  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'Ping']:t,[role+'SeenSeq']:seenSeq})}catch(e){}
  },
  async sendPong(code,role,t){
   try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'Pong']:t})}catch(e){}
+ },
+ // v399: see processPingPong()'s own comment in the classic script for the safety argument (both sides must have genuinely observed an entry
+ // before it's trimmed) -- this just does the actual removal, once that's established. arrayRemove is a server-side set-difference, atomic and
+ // safe even if the OTHER side's own arrayUnion (appending a brand new event) lands in the same moment -- unlike a plain updateDoc({evLog:...})
+ // overwrite, which would race and could silently drop that concurrent append.
+ async trimEvLog(code,staleEntries){
+  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{evLog:arrayRemove(...staleEntries)})}catch(e){}
  }
 };
 window.dispatchEvent(new Event('yb-fb-ready'));
@@ -450,7 +457,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v398'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v399'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2819,6 +2826,11 @@ let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // 
 // between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
 // echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
 // unchanged field don't re-send an echo or re-feed the same sample over and over.
+const EVLOG_TRIM_MIN=20; // v399: see trimStaleEvLog()'s own comment -- trim in batches, not one entry at a time, so this doesn't turn into its
+// own steady stream of extra writes on top of real gameplay events and the heartbeat.
+let evLogTrimInFlight=false; // v399: guards against firing a redundant trim write for the same batch again before the first one's write has
+// round-tripped back through a fresh snapshot (which is what actually shrinks data.evLog for the NEXT callback -- there's no other signal that
+// says "that trim landed" without it).
 function startPingHeartbeat(){ // v398: called the instant onlineActive actually flips true (both sides present) -- see its two call sites
  // (olHostMatch()/olJoinMatch()'s own watch() callbacks). A fixed 2s cadence: frequent enough to track a connection that's actually degrading
  // mid-match, infrequent enough not to meaningfully add to the match doc's write volume on top of real gameplay events.
@@ -2826,7 +2838,9 @@ function startPingHeartbeat(){ // v398: called the instant onlineActive actually
  pingTimer=setInterval(()=>{
   if(!onlineActive||!olMatchCode||!olRole||!window.YB_FB)return;
   myLastPingSent=performance.now()/1000;
-  window.YB_FB.sendPing(olMatchCode,olRole,myLastPingSent);
+  // v399: piggybacks our own highest-observed evLog seq onto the SAME write as the ping (one extra field, no extra round trip) -- see
+  // trimStaleEvLog()'s own comment for what this is for.
+  window.YB_FB.sendPing(olMatchCode,olRole,myLastPingSent,lastEvSeq);
  },2000);
 }
 function stopPingHeartbeat(){if(pingTimer){clearInterval(pingTimer);pingTimer=null}}
@@ -2844,6 +2858,30 @@ function processPingPong(data,peerRole){ // v398: called from both olHostMatch()
   lastPeerPongSeen=peerPong;
   if(peerPong===myLastPingSent){const rtt=performance.now()/1000-peerPong;if(rtt>=0&&rtt<15&&Date.now()>=netWakeGraceUntil)feedLatencySample(rtt*500)}
  }
+ trimStaleEvLog(data,peerRole);
+}
+function trimStaleEvLog(data,peerRole){ // v399: evLog (see sendEvent()'s own comment) is append-only and NEVER shrinks -- every single snapshot,
+ // for the rest of the match, carries the full history of every event either side has ever sent, and Firestore has to deliver, parse and hand
+ // us that whole document again on every change, including every ~2s heartbeat tick now. That's a real, structural cost that grows the longer a
+ // match runs and never goes back down -- "the first inning/pitch always looks fine, it gets worse the longer we play, and it never recovers" is
+ // exactly the shape a monotonically-growing, never-trimmed array produces, independent of anything latency-ESTIMATION related.
+ // Safe to shrink it, but only entries BOTH sides have genuinely already observed -- processNetEvLog()'s own comment is explicit that evLog's
+ // whole reason to exist is "nothing is dropped any more", so trimming an entry neither side has necessarily seen yet would just reintroduce
+ // exactly that. lastEvSeq (ours) and data[peerRole+'SeenSeq'] (piggybacked on the SAME heartbeat ping, above) are each side's own highest
+ // OBSERVED seq -- "observed" meaning it entered processNetEvLog()'s own `mine` loop, the same bar the stash-and-replay pattern already uses
+ // everywhere else, not that any particular handler necessarily acted on it. The lower of the two is the one safe cutoff: anything at or below
+ // it, both sides have already pulled out of evLog for good, so the array is the only place it still exists, serving no one.
+ // Only the host ever trims (never both) -- Firestore's arrayRemove is itself atomic and safe against the OTHER side's own concurrent arrayUnion
+ // (removal and append are independent set operations, not a read-modify-write of the whole field, so neither side racing the other here can
+ // silently drop a real event), but there's no reason to pay for two redundant trim writes when the resulting evLog ends up identical either way.
+ if(olRole!=='host'||evLogTrimInFlight)return;
+ const peerSeenSeq=data[peerRole+'SeenSeq'];
+ if(peerSeenSeq==null)return; // peer hasn't sent a heartbeat yet this match -- nothing confirmed safe to drop
+ const safeSeq=Math.min(lastEvSeq,peerSeenSeq);
+ const stale=(data.evLog||[]).filter(e=>e&&typeof e.seq==='number'&&e.seq<=safeSeq);
+ if(stale.length<EVLOG_TRIM_MIN)return;
+ evLogTrimInFlight=true;
+ window.YB_FB.trimEvLog(olMatchCode,stale).finally(()=>{evLogTrimInFlight=false});
 }
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
@@ -2934,10 +2972,14 @@ async function olHostMatch(code,statusEl){
  olUnsub=fb.watch(code,(data,err)=>{
   if(err){statusEl.textContent='Connection lost.';console.log('[wiffleball fb] watch error:',err);return}
   if(!data){statusEl.textContent='Match not found (it may have expired).';return}
-  console.log('[wiffleball fb] match doc:',data);
-  console.log('[wiffleball net] evLog ('+((data.evLog||[]).length)+' total):',(data.evLog||[]).map(e=>e&&(e.type+'#'+e.seq+' from '+e.from)).join(' | '));
+  // v399: this callback fires on EVERY snapshot -- every real gameplay event, and now every ~2s heartbeat tick too. Two debug console.log lines
+  // used to sit right here: one dumping the whole match doc, and one doing a .map()+.join() over the ENTIRE evLog array to print a summary of it.
+  // That second one is a real, synchronous, main-thread cost that scales with evLog's total length, re-paid on every single snapshot for the rest
+  // of the match -- "first inning/pitch always looks good, gets worse the longer we play, never recovers" is exactly the shape that produces.
+  // Removed outright rather than throttled/length-capped -- it was pure debug output with no gameplay function, so there's no tradeoff in cutting
+  // it, and the trimEvLog() call below (see processPingPong()) addresses the other half of the same growth problem (the array itself).
   processNetEvLog(data.evLog);
-  processPingPong(data,'join'); // v398: see its own comment
+  processPingPong(data,'join'); // v398/v399: see its own comment
   oppHitAndPitch=!!data.awayHitAndPitch; // v356: host's opponent is always the joiner/away side -- keep this live (not just read once) in case they flip their toggle before locking in
   if(data.joinReady)olPeerReady=true; // v318: the joiner's own beginGame() click, mirrored here so the host doesn't throw a pitch before the joiner's screen has actually unpaused
   if(data.join&&data.join.present){statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;startPingHeartbeat();showTutorial()}}
@@ -2958,10 +3000,8 @@ async function olJoinMatch(code,statusEl){
  olUnsub=fb.watch(code,(data,err)=>{
   if(err){statusEl.style.color='#ff8a80';statusEl.textContent='Connection lost.';console.log('[wiffleball fb] watch error:',err);return}
   if(!data){statusEl.style.color='#ff8a80';statusEl.textContent='Match not found (it may have expired).';return}
-  console.log('[wiffleball fb] match doc:',data);
-  console.log('[wiffleball net] evLog ('+((data.evLog||[]).length)+' total):',(data.evLog||[]).map(e=>e&&(e.type+'#'+e.seq+' from '+e.from)).join(' | '));
-  processNetEvLog(data.evLog);
-  processPingPong(data,'host'); // v398: see its own comment
+  processNetEvLog(data.evLog); // v399: see olHostMatch()'s own watch() callback for why the debug evLog dump that used to sit here is gone
+  processPingPong(data,'host'); // v398/v399: see its own comment
   if(data.settings){pitcherMode=data.settings.pitcherMode??pitcherMode;pitchLocMode=data.settings.pitchLocMode??pitchLocMode;inningsMode=data.settings.inningsMode??inningsMode;refreshSettingsLabels()} // v335: adopt the host's chosen game settings -- see hostMatch()'s own comment for why these ride along on the match doc itself
   oppHitAndPitch=!!data.homeHitAndPitch; // v356: joiner's opponent is always the host/home side -- kept live for the same reason as the host-side branch above
   if(data.hostReady)olPeerReady=true; // v318: the host's own beginGame() click, mirrored here so the joiner doesn't throw a pitch before the host's screen has actually unpaused
@@ -3349,11 +3389,19 @@ function applyNetResult(d){ // spectator only -- normally arrives just after app
 }
 function applyNetResultNow(d){ // spectator only -- the actual state-transition half of applyNetResult() above, fired either immediately (a
  // contacted result) or at the scheduled local time (tick(), for a no-contact take -- see netPendingResult's own comment).
- // v328: playPitchAudio() (called for BOTH sides when the windup ends, completely unconditionally) pre-schedules the "ball reaches the target/
- // strike zone" sound to fire automatically at the exact time the ball would cross the plate -- normally applyNetContact() above already
- // cancelled it at the true moment of contact; this is just a safety net for the rare case that event is somehow missed, so a stale "hit the
- // target" sound still can't survive to play on a result that was actually a hit.
+ // v328: a CONTACTED result -- cancel anything still playing/pending from this pitch (normally applyNetContact()/startNetHit() already did this
+ // the moment real contact was confirmed; this is just a safety net for the rare case that event somehow never arrived at all and the result's
+ // own safety-net timeout is what's resolving this pitch instead -- see netPendingResult's own comment).
+ // v399: a NO-CONTACT result is where the real fix lives -- see playPitchAudio()'s own comment for the full report ("seeing the ball hit the
+ // target and hear it, when it was actually hit"). That function no longer pre-schedules this spectator's own "ball reached the target" sound
+ // at all, specifically so it's IMPOSSIBLE for it to fire before the network has actually confirmed no contact happened. This is that
+ // confirmation, so this is where the sound actually plays now -- reactively, using this pitch's own still-live P (inZ/sp) to pick the right
+ // variant, the same way playHitSound() already plays the hit sound reactively off the confirmed 'contact' payload instead of guessing ahead.
  if(d.contacted)stopPitchAudio();
+ else if(P&&actx){
+  const sb=P.inZ?SFX[P.sp>=C.HARD?SOUNDS.strikeHard:SOUNDS.strikeSoft]:null;
+  if(sb){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=sb;g.gain.value=.9;s.connect(g);g.connect(actx.destination);s.start()}
+ }
  applyNetSnapshot(d.state);
  $('msg').textContent=d.msg||'';$('msg').style.color=d.col||'#fff';$('sub').textContent=d.sub||'';
  // v332: don't force `swinging` off here either -- same reasoning as startNetHit() above. A quick-settling play (e.g. a routine grounder) can have
@@ -3949,8 +3997,20 @@ function playPitchAudio(){if(!actx||!P)return;stopPitchAudio();const T=P.T-(perf
  if(fb){const avail=Math.max(.2,T-.08),rate=Math.max(.8,Math.min(1.4,fb.duration/avail)),st=Math.max(.08,T-fb.duration/rate),vol=Math.min(1,.55+.45*(P.sp-13)/13);
   const s=actx.createBufferSource(),g=actx.createGain();s.buffer=fb;s.playbackRate.value=rate;g.gain.setValueAtTime(0,t0+st);g.gain.linearRampToValueAtTime(vol,t0+st+.12);
   s.connect(g);g.connect(actx.destination);s.start(t0+st);s.stop(t0+Math.min(T+.02,st+fb.duration/rate));sfxFlight={s,g}}
- const sb=P.inZ?SFX[P.sp>=C.HARD?SOUNDS.strikeHard:SOUNDS.strikeSoft]:null; // strike only if it reaches the panel; hard fastball above C.HARD m/s
- if(sb){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=sb;g.gain.value=.9;s.connect(g);g.connect(actx.destination);s.start(t0+Math.max(0,T));sfxStrike={s,g}}}
+ // v399: a real report -- "seeing the ball hit the target and hear it are just cues that we have it wrong [when it was actually hit]... we need
+ // to make sure if a ball is hit, we never see a case where it looks like it wasn't". Root cause: this "ball reached the target" sound used to be
+ // PRE-SCHEDULED right here, at windup-end, to fire automatically at a fixed point in local-clock time -- completely independent of whether the
+ // batting side's own 'contact' event has arrived yet. No finite buffer can make that a GUARANTEE, only a probability -- there's always some
+ // delay longer than whatever margin gets picked, so the fix isn't a bigger buffer (already tried, and rejected for exactly that reason), it's to
+ // stop pre-committing to the outcome at all. The spectator (iAmSpectating) now never schedules this sound here -- it only ever plays reactively,
+ // in applyNetResultNow(), at the exact instant the network actually confirms no contact happened. If it was really a hit, that moment never
+ // comes for this sound -- playHitSound() fires instead, confirmed, the same way it already does. The real batter's own screen is unaffected: for
+ // them this is ground truth (nothing can ever contradict their own swing), so it still plays in perfect real-time sync with their own pitch.
+ if(!(onlineActive&&!iAmBatting())){
+  const sb=P.inZ?SFX[P.sp>=C.HARD?SOUNDS.strikeHard:SOUNDS.strikeSoft]:null; // strike only if it reaches the panel; hard fastball above C.HARD m/s
+  if(sb){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=sb;g.gain.value=.9;s.connect(g);g.connect(actx.destination);s.start(t0+Math.max(0,T));sfxStrike={s,g}}
+ }
+}
 function playHitSound(nm,ev){ // v380: split out of playHit() below so the spectator side (startNetHit()) can play the EXACT clip the batting side
  // already chose and sent over the network, without needing swingInfo/r/mastery/etc to re-derive which SOUNDS.hitRules entry would have matched --
  // it never has that data, which is exactly why the hit sound was previously silent on whichever side wasn't actually swinging.
