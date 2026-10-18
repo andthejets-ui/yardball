@@ -36,6 +36,13 @@ canvas{display:block;width:100%;height:100%}
 #inningArrow{color:#ffd23f;font-size:11px;line-height:1}
 #msg{top:36%;width:100%;text-align:center;font-size:clamp(28px,7vw,56px);font-weight:800}
 #sub{top:48%;width:100%;text-align:center;font-size:clamp(14px,2.5vw,20px)}
+/* v390b: #contHint always shows the "how do I skip this" instruction for the result screen currently up, completely independent of #sub -- #sub
+ itself is intentionally debug-only (see the Debug button's own onclick toggling its display, and the comment by it) and CONTINUE_HINT used to be
+ appended straight onto #sub's own text (see endNoContact()/the hit-result function), so the instruction disappeared along with the rest of #sub
+ the moment debug-detail display was hidden by default -- "we lost the text that said what you needed to do to skip that screen". say() (the one
+ shared place every result funnels through) now always sets this element's text whenever it sets holdNext, and every place that clears a result
+ (continuePress(), applyNetAdvance(), applyNetPitchStart(), startPitch()) clears it right alongside #msg/#sub. */
+#contHint{top:54%;width:100%;text-align:center;font-size:13px;opacity:.75}
 #dbg{top:calc(92px + env(safe-area-inset-top,0px));left:10px;font:12px/1.4 monospace;background:#0008;padding:6px 8px;border-radius:6px;max-width:46vw}
 #hint{bottom:calc(12px + env(safe-area-inset-bottom,0px));width:100%;text-align:center;font-size:13px;opacity:.85}
 #bar{bottom:calc(36px + env(safe-area-inset-bottom,0px));left:25%;width:50%;height:10px;background:#0008;border-radius:5px;overflow:hidden}
@@ -219,7 +226,8 @@ exactly the "floats up to the top-left" bug. */
  "never truly unreachable" fallback already used on the other screens (see #titleScreen etc., v379) -- scrollable in the rare case it's still
  too tall, rather than just clipped. The @media block below additionally shrinks the widget on short viewports so that fallback is rarely needed. */
  max-height:calc(100vh - 26% - env(safe-area-inset-bottom,0px) - 10px);overflow-y:auto;-webkit-overflow-scrolling:touch}
-#poTitle{font-weight:800;color:#7fff7f;margin-bottom:6px;letter-spacing:.05em}
+#poTitle{font-weight:800;color:#7fff7f;margin-bottom:2px;letter-spacing:.05em}
+#poStep{font-size:11px;font-weight:700;color:#ffd866;margin-bottom:6px;letter-spacing:.03em} /* v390: explicit step indicator -- see renderPitcherOverlay()'s own comment for why this exists even though nothing stale was actually left on screen between pitches */
 #poCompass{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,34px);gap:2px;pointer-events:auto;touch-action:none;cursor:pointer} /* v381: mouse/touch pitch-type pick reads real pointer events off this element -- see the pointer listeners near pollHumanPitch() -- so it needs pointer-events re-enabled, overriding #pitcherOverlay's own pointer-events:none (that none is still exactly right for the rest of the overlay, which stays a pure readout) */
 #poCompass .poDirCell{display:flex;align-items:center;justify-content:center;background:#1b2a1b;border:1px solid #3a5a3a;border-radius:4px;font-size:11px;font-weight:700;padding:2px;text-align:center}
 #poCompass .poDirCell.pick{background:#2c7;color:#002}
@@ -238,7 +246,7 @@ exactly the "floats up to the top-left" bug. */
 /* v352: #poAimZone is the FULL range the stick can reach (see AIM_TX_MAX/AIM_TY_MAX) -- #poStrikeZone is a real, to-scale inset of the actual
  strike zone (the same tx/[-0.3,0.3]/ty/[0.25,0.95] bounds startPitch() itself calls a strike, see P.inZ) drawn inside it, so the gap between the
  two IS "well outside the zone" made visible -- the player can see exactly how much stick travel is still "a ball" before throwing. */
-#poAimZone{position:relative;width:160px;height:150px;margin:0 auto;background:#111;border:2px solid #555;pointer-events:auto;touch-action:none;cursor:pointer} /* v381: mouse/touch aim -- same pointer-events override as #poCompass above, for the same reason */
+#poAimZone{position:relative;width:160px;height:150px;margin:0 auto;background:#111;border:2px solid #555;pointer-events:auto;touch-action:none;cursor:none} /* v381: mouse/touch aim -- same pointer-events override as #poCompass above, for the same reason. v390: was cursor:pointer -- the red dot (#poAimDot) IS the pointer here now (see mousemove's own comment), so the real OS cursor hides instead of floating around as a second, decoupled indicator */
 /* box edges computed from the real zone (tx in [-0.3,0.3], ty in [0.25,0.95], see startPitch()'s P.inZ) against the SAME AIM_TX_MAX/AIM_TY_MAX
  the dot's own px/py formula in renderPitcherOverlay() uses, so the dashed box and the dot line up exactly -- not independently eyeballed. */
 #poStrikeZone{position:absolute;left:28%;right:28%;top:30%;bottom:18%;border:2px dashed #7fff7f;background:#7fff7f14}
@@ -264,6 +272,14 @@ exactly the "floats up to the top-left" bug. */
  #poCompass{grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,26px)}
  #poAimZone{width:140px;height:108px}
  #poLoadMeter{width:140px}
+ /* v390b: #msg/#sub/#contHint are sized with clamp(...,Nvw,...) -- fine on a normal-aspect window, but on a short LANDSCAPE phone (iPhone 14 at
+ 844x390, iPhone SE at 667x375 -- same devices the pitching widget above is already shrunk for) the viewport is comfortably WIDE but very short,
+ so a vw-based size that reads as reasonable relative to width ends up reading as oversized relative to the little vertical room actually
+ available -- "much bigger on iphone scale wise than it is on PC" even though the raw px size is width-driven and not literally device-specific.
+ Capping the clamp lower here, the same way the pitching widget already gets a dedicated short-viewport size instead of just scaling with width. */
+ #msg{font-size:clamp(20px,6vw,34px)}
+ #sub{font-size:clamp(12px,2vw,16px)}
+ #contHint{font-size:11px}
 }
 #btns{position:fixed;left:10px;top:calc(8px + env(safe-area-inset-top,0px));z-index:5;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-start;max-width:calc(50vw - 170px)}
 #btns button{font-size:12px;padding:6px 10px;border-radius:6px;border:0;background:#000a;color:#fff}
@@ -271,8 +287,8 @@ exactly the "floats up to the top-left" bug. */
 <canvas id="c"></canvas>
 <div id="padDiag">🎮 diag: starting…</div>
 <div id="rotateScreen" class="hidden"><div id="rotateIcon">📱</div><div class="msg">Rotate your device to play</div><div style="font-size:13px;opacity:.75">Yard Ball plays best in landscape</div></div>
-<div id="titleScreen"><div id="verTag"></div><div id="titleArtWrap"><img id="titleImg" alt="Yard Ball" width="1024" height="575"><div id="titleFooter"><div id="pressPrompt">▶ PRESS TO PLAY</div><div id="titleModeButtons" class="hidden"><button id="modeLocalBtn">🏠 LOCAL PLAY</button><button id="modeOnlineBtn">🌐 ONLINE PLAY</button></div></div></div></div><div id="localModeScreen" class="hidden"><div id="lmTitle">LOCAL PLAY</div><div id="lmButtons"><button id="lmSwapPassBtn" class="lmBtn">🔁 Swap &amp; Pass<span class="lmDesc">One controller, hot-seat hitting -- ready up and go. Hit Only; the CPU always pitches.</span></button><button id="lmPvcBtn" class="lmBtn">🤖 Player vs CPU<span class="lmDesc">Pick Home or Away and play against a CPU opponent.</span></button><button id="lmPvpBtn" class="lmBtn">🎮 Player vs Player<span class="lmDesc">Two controllers, two sides. Leave one unclaimed for Swap &amp; Pass instead.</span></button></div><button id="lmBackBtn">← Back</button></div><div id="sideSelectScreen" class="hidden"><div id="ssTitle">CHOOSE YOUR SIDES</div><div id="ssArtWrap"><img id="ssImg" alt="Away Team / Home Team" width="1024" height="575"></div><div id="ssPanels"><div id="ssRedPanel" class="ssPanel"><div class="ssLocalBody"><div id="ssRedBind" class="ssBindLabel">Unclaimed</div><div id="ssRedPitchRow" class="olPitchRow hidden"><span id="ssRedArrowL" class="olArrow">◀</span><button id="ssRedPitch" class="ssPitchBtn">Hit Only</button><span id="ssRedArrowR" class="olArrow">▶</span></div><div id="ssRedPitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssRedBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olRedPickWrap" class="olPickWrap"><button id="olRedPickBtn" class="olPickBtn">🚶 Join · Away</button></div><div id="olRedPitchWrap" class="olPitchWrap hidden"><div id="olRedBind" class="ssBindLabel"></div><div id="olRedPitchRow" class="olPitchRow"><span id="olRedArrowL" class="olArrow">◀</span><button id="olRedPitch" class="ssPitchBtn">Hit Only</button><span id="olRedArrowR" class="olArrow">▶</span></div><div id="olRedPitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olRedLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olRedBackBtn" class="olBackBtn">← Back</button></div><div id="olRedActionWrap" class="olActionWrap hidden"><button id="olJoinBtn" class="hidden">Join a Game</button><div id="olJoinPane" class="hidden"><input id="olJoinCode" maxlength="6" placeholder="CODE" inputmode="none" autocomplete="off" autocapitalize="characters"><div id="olKeypad"></div><button id="olJoinConnectBtn">Connect</button><div id="olStatus2" class="olStatus"></div></div></div></div></div><div id="ssBluePanel" class="ssPanel"><div class="ssLocalBody"><div id="ssBlueBind" class="ssBindLabel">Unclaimed</div><div id="ssBluePitchRow" class="olPitchRow hidden"><span id="ssBlueArrowL" class="olArrow">◀</span><button id="ssBluePitch" class="ssPitchBtn">Hit Only</button><span id="ssBlueArrowR" class="olArrow">▶</span></div><div id="ssBluePitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssBlueBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olBluePickWrap" class="olPickWrap"><button id="olBluePickBtn" class="olPickBtn">🏠 Host · Home</button></div><div id="olBluePitchWrap" class="olPitchWrap hidden"><div id="olBlueBind" class="ssBindLabel"></div><div id="olBluePitchRow" class="olPitchRow"><span id="olBlueArrowL" class="olArrow">◀</span><button id="olBluePitch" class="ssPitchBtn">Hit Only</button><span id="olBlueArrowR" class="olArrow">▶</span></div><div id="olBluePitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olBlueLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olBlueBackBtn" class="olBackBtn">← Back</button></div><div id="olBlueActionWrap" class="olActionWrap hidden"><button id="olHostBtn" class="hidden">Host a Game</button><button id="ssHostSettingsBtn" class="hidden">⚙ Game Settings</button><div id="olHostPane" class="hidden"><div style="font-size:11px;opacity:.6">Share this code:</div><div id="olCode">----</div><div id="olStatus" class="olStatus"></div></div></div></div></div></div><div id="ssLocalHint" class="ssHint">Tap or click a side to claim it, or D-pad/stick left-right then A (keyboard: ←/→ then Enter). Once claimed, left/right (or the arrows) set Hit Only vs Hit &amp; Pitch for a gamepad-claimed side instead of switching sides -- press Back (or Esc/B) to unclaim and pick a different side.</div><div id="ssOnlineHint" class="ssHint hidden">Pick Join/Away or Host/Home to lock onto that side -- Back undoes it. Hosting always plays Home; joining always plays Away.</div><div id="ssButtons"><button id="ssStartBtn">▶ START LOCAL GAME</button><button id="ssSettingsBtn">⚙ Game Settings</button><button id="ssOnlineStartBtn" class="hidden">▶ START</button></div><button id="ssBackBtn">← Back</button></div><div id="startScreen" class="hidden"><div id="startCard"><img id="startImg" alt="Swing Mechanic: Hold &amp; Release"></div><button id="startBtn">▶ PLAY BALL</button></div><div id="gameOverScreen" class="hidden"><div id="goCard"><div id="goWinner"></div><div id="goScore"></div><div id="goInnings"></div><button id="goPlayAgain">Play Again</button></div></div><div id="pitcherOverlay" class="hidden"><div id="poTitle">🎯 PITCHER</div><div id="poCompass"></div><div id="poAim" class="hidden"><div id="poTypeLabel"></div><div id="poAimZone"><div id="poStrikeZone"></div><div id="poAimDot"></div></div><div id="poLoadMeter"><div id="poLoadFill"></div></div></div><div id="poHint"></div></div>
-<div class="h" id="sbrow"><div id="scores"><div class="teamScore" id="scoreRed"><div class="flipCard" id="scoreRedCard"><div class="face front" id="scoreRedFront">0</div><div class="face back" id="scoreRedBack">0</div></div></div><div class="teamScore" id="scoreBlue"><div class="flipCard" id="scoreBlueCard"><div class="face front" id="scoreBlueFront">0</div><div class="face back" id="scoreBlueBack">0</div></div></div></div><div id="sb"></div><div id="bases"><div class="base" id="b2"></div><div class="base" id="b3"></div><div class="base" id="b1"></div></div><div id="inningBox"><span id="inningArrow">▲</span><span id="inningNum">1</span></div></div><div class="h" id="msg"></div><div class="h" id="sub"></div>
+<div id="titleScreen"><div id="verTag"></div><div id="titleArtWrap"><img id="titleImg" alt="Yard Ball" width="1024" height="575"><div id="titleFooter"><div id="pressPrompt">▶ PRESS TO PLAY</div><div id="titleModeButtons" class="hidden"><button id="modeLocalBtn">🏠 LOCAL PLAY</button><button id="modeOnlineBtn">🌐 ONLINE PLAY</button></div></div></div></div><div id="localModeScreen" class="hidden"><div id="lmTitle">LOCAL PLAY</div><div id="lmButtons"><button id="lmSwapPassBtn" class="lmBtn">🔁 Swap &amp; Pass<span class="lmDesc">One controller, hot-seat hitting -- ready up and go. Hit Only; the CPU always pitches.</span></button><button id="lmPvcBtn" class="lmBtn">🤖 Player vs CPU<span class="lmDesc">Pick Home or Away and play against a CPU opponent.</span></button><button id="lmPvpBtn" class="lmBtn">🎮 Player vs Player<span class="lmDesc">Two controllers, two sides. Leave one unclaimed for Swap &amp; Pass instead.</span></button></div><button id="lmBackBtn">← Back</button></div><div id="sideSelectScreen" class="hidden"><div id="ssTitle">CHOOSE YOUR SIDES</div><div id="ssArtWrap"><img id="ssImg" alt="Away Team / Home Team" width="1024" height="575"></div><div id="ssPanels"><div id="ssRedPanel" class="ssPanel"><div class="ssLocalBody"><div id="ssRedBind" class="ssBindLabel">Unclaimed</div><div id="ssRedPitchRow" class="olPitchRow hidden"><span id="ssRedArrowL" class="olArrow">◀</span><button id="ssRedPitch" class="ssPitchBtn">Hit Only</button><span id="ssRedArrowR" class="olArrow">▶</span></div><div id="ssRedPitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssRedBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olRedPickWrap" class="olPickWrap"><button id="olRedPickBtn" class="olPickBtn">🚶 Join · Away</button></div><div id="olRedPitchWrap" class="olPitchWrap hidden"><div id="olRedBind" class="ssBindLabel"></div><div id="olRedPitchRow" class="olPitchRow"><span id="olRedArrowL" class="olArrow">◀</span><button id="olRedPitch" class="ssPitchBtn">Hit Only</button><span id="olRedArrowR" class="olArrow">▶</span></div><div id="olRedPitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olRedLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olRedBackBtn" class="olBackBtn">← Back</button></div><div id="olRedActionWrap" class="olActionWrap hidden"><button id="olJoinBtn" class="hidden">Join a Game</button><div id="olJoinPane" class="hidden"><input id="olJoinCode" maxlength="6" placeholder="CODE" inputmode="none" autocomplete="off" autocapitalize="characters"><div id="olKeypad"></div><button id="olJoinConnectBtn">Connect</button><div id="olStatus2" class="olStatus"></div></div></div></div></div><div id="ssBluePanel" class="ssPanel"><div class="ssLocalBody"><div id="ssBlueBind" class="ssBindLabel">Unclaimed</div><div id="ssBluePitchRow" class="olPitchRow hidden"><span id="ssBlueArrowL" class="olArrow">◀</span><button id="ssBluePitch" class="ssPitchBtn">Hit Only</button><span id="ssBlueArrowR" class="olArrow">▶</span></div><div id="ssBluePitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssBlueBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olBluePickWrap" class="olPickWrap"><button id="olBluePickBtn" class="olPickBtn">🏠 Host · Home</button></div><div id="olBluePitchWrap" class="olPitchWrap hidden"><div id="olBlueBind" class="ssBindLabel"></div><div id="olBluePitchRow" class="olPitchRow"><span id="olBlueArrowL" class="olArrow">◀</span><button id="olBluePitch" class="ssPitchBtn">Hit Only</button><span id="olBlueArrowR" class="olArrow">▶</span></div><div id="olBluePitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olBlueLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olBlueBackBtn" class="olBackBtn">← Back</button></div><div id="olBlueActionWrap" class="olActionWrap hidden"><button id="olHostBtn" class="hidden">Host a Game</button><button id="ssHostSettingsBtn" class="hidden">⚙ Game Settings</button><div id="olHostPane" class="hidden"><div style="font-size:11px;opacity:.6">Share this code:</div><div id="olCode">----</div><div id="olStatus" class="olStatus"></div></div></div></div></div></div><div id="ssLocalHint" class="ssHint">Tap or click a side to claim it, or D-pad/stick left-right then A (keyboard: ←/→ then Enter). Once claimed, left/right (or the arrows) set Hit Only vs Hit &amp; Pitch for a gamepad-claimed side instead of switching sides -- press Back (or Esc/B) to unclaim and pick a different side.</div><div id="ssOnlineHint" class="ssHint hidden">Pick Join/Away or Host/Home to lock onto that side -- Back undoes it. Hosting always plays Home; joining always plays Away.</div><div id="ssButtons"><button id="ssStartBtn">▶ START LOCAL GAME</button><button id="ssSettingsBtn">⚙ Game Settings</button><button id="ssOnlineStartBtn" class="hidden">▶ START</button></div><button id="ssBackBtn">← Back</button></div><div id="startScreen" class="hidden"><div id="startCard"><img id="startImg" alt="Swing Mechanic: Hold &amp; Release"></div><button id="startBtn">▶ PLAY BALL</button></div><div id="gameOverScreen" class="hidden"><div id="goCard"><div id="goWinner"></div><div id="goScore"></div><div id="goInnings"></div><button id="goPlayAgain">Play Again</button></div></div><div id="pitcherOverlay" class="hidden"><div id="poTitle">🎯 PITCHER</div><div id="poStep"></div><div id="poCompass"></div><div id="poAim" class="hidden"><div id="poTypeLabel"></div><div id="poAimZone"><div id="poStrikeZone"></div><div id="poAimDot"></div></div><div id="poLoadMeter"><div id="poLoadFill"></div></div></div><div id="poHint"></div></div>
+<div class="h" id="sbrow"><div id="scores"><div class="teamScore" id="scoreRed"><div class="flipCard" id="scoreRedCard"><div class="face front" id="scoreRedFront">0</div><div class="face back" id="scoreRedBack">0</div></div></div><div class="teamScore" id="scoreBlue"><div class="flipCard" id="scoreBlueCard"><div class="face front" id="scoreBlueFront">0</div><div class="face back" id="scoreBlueBack">0</div></div></div></div><div id="sb"></div><div id="bases"><div class="base" id="b2"></div><div class="base" id="b3"></div><div class="base" id="b1"></div></div><div id="inningBox"><span id="inningArrow">▲</span><span id="inningNum">1</span></div></div><div class="h" id="msg"></div><div class="h" id="sub"></div><div class="h" id="contHint"></div>
 <div class="h" id="dbg"></div><div class="h" id="bar"><div id="fill"></div></div>
 <div class="h" id="pad" style="left:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:12px"></div><div class="h" id="hint">Hold (Space / touch / A or RT) to stride &amp; load · release to swing · press again right away = check swing · B / Right-click / Alt = next pitch · C = change camera</div>
 <div class="h" id="lastPitch" style="right:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:13px;background:#000a;padding:4px 10px;border-radius:6px;display:none"></div>
@@ -353,7 +369,20 @@ window.YB_FB={
  // classic script tags every event with a seq (Date.now()) and a `from` role so the receiving side can ignore its own echo (onSnapshot fires for
  // your own writes too) and track which entries in the array it's already applied.
  async sendEvent(code,ev){
-  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{evLog:arrayUnion(ev)})}catch(e){console.log('[wiffleball fb] sendEvent failed:',e)}
+  // v390: used to be a single try, log-and-give-up on failure -- the caller (netSend(), in the main script) never awaits this promise either, so a
+  // single transient write failure (a brief wifi/cellular drop -- exactly the kind two wired PCs on the same network rarely hit, but a phone does)
+  // silently discarded the event forever, with nothing anywhere ever finding out. For most event types something else eventually papers over a
+  // lost one (a missed 'checkSwing' is cosmetic, a missed 'swing'/'contact' still gets corrected by the authoritative 'result' behind it), but see
+  // 'advance' specifically (continuePress()'s own comment) for why losing THAT one silently can wedge the whole match. Retrying the write itself a
+  // few times with a short backoff catches the overwhelming majority of real transient blips right here, for every event type uniformly, rather
+  // than only patching it for the one event that happened to get its own dedicated resend loop.
+  for(let attempt=0;attempt<3;attempt++){
+   try{await updateDoc(doc(db,'matches',code.toLowerCase()),{evLog:arrayUnion(ev)});return}
+   catch(e){
+    console.log('[wiffleball fb] sendEvent failed (attempt '+(attempt+1)+'/3):',e);
+    if(attempt<2)await new Promise(r=>setTimeout(r,250*(attempt+1)));
+   }
+  }
  },
  // v318: each side flips its own flag true the instant it clicks past its own local tutorial screen (beginGame()) -- the batting side's tick()
  // loop waits to see the OTHER side's flag before throwing the first pitch, so one player's screen can no longer start running (and get several
@@ -386,7 +415,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v389'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v390'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1308,7 +1337,7 @@ function startPitch(now,human){ // v349: `human` ({type,tx,ty}), when passed, is
  if(t.kn){P.kx=kGen(.7,T);P.ky=kGen(.3,T);P.dxT=kD(P.kx,T);P.dyT=kD(P.ky,T)} // sideways force ~0.4-0.9 m/s^2, vertical about half that
  pc++;if(battingTeam==='red')pcRed++;else pcBlue++; // v313: this pitch is being thrown TO whoever battingTeam says is up right now
  stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];tRel=now+C.WIND+3/30;st='windup';contacted=missed=false;swungFor=false;landed=false;first=null;maxD=0;crossed=null;peak=0;fairDec=null;trk.length=0; // +3 frames now -- feedback pattern was early at 0, closer but still early at +2, so incrementing once more.
- $('msg').textContent='';$('sub').textContent='';
+ $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
  if(onlineActive&&iAmBatting())netSend('pitchStart',{tIdx:TYPES.indexOf(t),sp,T,a:{x:a.x,y:a.y,z:a.z},v:{x:v.x,y:v.y,z:v.z},ph:P.ph,tx,ty,inZ:P.inZ,kx:P.kx||null,ky:P.ky||null,dxT:P.dxT,dyT:P.dyT,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
 }
 // ---- v349: human pitching (local only -- see hitAndPitch's own declaration) ----------------------------------------------------------------------
@@ -1380,6 +1409,12 @@ function renderPitcherOverlay(){
  $('poCompass').classList.toggle('hidden',!picking);
  $('poAim').classList.toggle('hidden',picking);
  const devType=(sideBind[pitchPickSide]||{}).type; // v381: hint text now depends on how this pitcher is actually controlled -- gamepad/mouse/touch each use a different gesture for the same two stages
+ // v390: explicit step label, always shown, same wording regardless of device/online-offline -- "it is still confusing for the pitchers to see the
+ // last pitch show up when they are being asked to select their next pitch. They think they need to start aiming" was reported even though nothing
+ // stale was actually left on screen (enterPitchPick() always resets pick/aim state fully, and the whole aim/meter section is hidden outright
+ // during picking -- confirmed by reading both). Nothing ever announced WHICH of the two steps you were looking at, so the fix is adding that
+ // announcement outright rather than trying to make an already-correct reset somehow more correct.
+ $('poStep').textContent=picking?'Step 1 of 2 — Choose your pitch':'Step 2 of 2 — Aim & throw';
  if(picking){
   Array.from($('poCompass').children).forEach(c=>{if(c.dataset.idx!==undefined)c.classList.toggle('pick',+c.dataset.idx===pitchPickIdx)});
   $('poHint').textContent=devType==='mouse'?'Hover a pitch, click to lock it in':devType==='touch'?'Tap a pitch, or hold and drag to choose, then release to lock it in':'Flick the stick toward a pitch, then press A to lock it in';
@@ -1490,16 +1525,25 @@ function lockPitchPick(idx){ // shared by the mouse-click and touch-release lock
  pitchPickLockedType=HUMAN_PITCH_TYPES[idx];st='pitchAim';pitchAimTx=0;pitchAimTy=(AIM_TY_MAX+AIM_TY_MIN)/2;pitchAimLoading=false;pitchAimNeedsRelease=false;
  renderPitcherOverlay();
 }
-const PITCH_MOUSE_AIM_SENS=0.003; // mouse aim tracks RELATIVE movement (movementX/Y), not absolute cursor position, so it works no matter where
-// on screen the cursor physically is -- same reason a shooter's mouselook uses deltas, not raw position. Tuned so a few normal mouse-length flicks
-// cover the full aim range, same rough feel as a stick's own full deflection.
 addEventListener('mousemove',e=>{
  if(!pitchDeviceActive('mouse'))return;
  if(st==='pitchPick'){
   pitchPickIdx=cellIdxAtPoint(e.clientX,e.clientY);renderPitcherOverlay(); // v382: literally whichever cell the cursor is over -- see cellIdxAtPoint()'s own comment
  } else {
-  pitchAimTx=Math.max(-AIM_TX_MAX,Math.min(AIM_TX_MAX,pitchAimTx+(e.movementX||0)*PITCH_MOUSE_AIM_SENS));
-  pitchAimTy=Math.max(AIM_TY_MIN,Math.min(AIM_TY_MAX,pitchAimTy-(e.movementY||0)*PITCH_MOUSE_AIM_SENS)); // movementY is screen-down-positive; subtracting makes moving the mouse UP aim higher, same convention the stick already uses
+  // v390: used to track RELATIVE mouse movement (movementX/Y, like a shooter's mouselook), completely decoupled from where the cursor physically
+  // was on screen -- the cursor stayed a normal hand pointer, floating independently of the red dot it was supposedly controlling, which read as
+  // confusing even once you'd learned it ("the mouse/hand and the red dot being decoupled... feels confusing" -- direct report). Switched to the
+  // exact same ABSOLUTE position mapping touch already uses (pitchTouchAimFromClient) -- the dot now sits exactly where the cursor is, same as a
+  // touch's own finger-to-dot relationship, no translation layer in between. Gated to only update while the cursor is actually over #poAimZone's
+  // own box (not the instant you enter pitchAim phase, wherever the cursor happened to be at that moment, and not once it wanders off over other
+  // UI/game-world) -- per the same report: "shouldn't start moving... until the mouse gets into that region". #poAimZone's own CSS now sets
+  // cursor:none while hovered, so the real OS cursor disappears there and the dot reads as the only pointer -- "unite with the red dot... only
+  // seeing and controlling the red dot when you are in that section", exactly as asked. Outside the box the dot simply holds its last position,
+  // same as it already did before you ever moved the mouse at all.
+  const r=$('poAimZone').getBoundingClientRect();
+  if(e.clientX>=r.left&&e.clientX<=r.right&&e.clientY>=r.top&&e.clientY<=r.bottom){
+   const a=pitchTouchAimFromClient(e.clientX,e.clientY);pitchAimTx=a.tx;pitchAimTy=a.ty;
+  }
   renderPitcherOverlay();
  }
 });
@@ -1705,7 +1749,7 @@ function continuePress(src){ // the dedicated "advance past a result" input (B /
  const n=performance.now()/1000;
  holdNext=false;
  $('dbg').innerHTML=$('dbg').innerHTML.replace(/<br><b>[^<]*next pitch<\/b>/,'');
- $('msg').textContent='';$('sub').textContent='';
+ $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
  resLines=[];snap=null;trailPts.length=0;setTrail();
  ball.position.y=-9;shd.position.y=-9;
  kidPitcherIdleT=0; // fresh idle phase -- a clean "ready" pose instead of wherever the post-swing settle happened to leave off
@@ -1714,7 +1758,27 @@ function continuePress(src){ // the dedicated "advance past a result" input (B /
  // the whole next windup is already under way) -- so it just sat on stale result text for however long the batter took to decide to continue, then
  // the idle gap, then the windup. Sending a tiny instant signal right here (the moment the batter's own screen actually clears the result) lets the
  // spectator clear its OWN stale text immediately too, instead of waiting on the next pitch's data to do it as a side effect.
- if(onlineActive&&iAmBatting())netSend('advance',{});
+ // v390: this single send used to be fire-and-forget, same as every other netSend() call -- fine for most events (a lost 'checkSwing' is purely
+ // cosmetic, a lost 'swing'/'contact' still gets corrected by the authoritative 'result' that follows), but losing THIS one specifically can wedge
+ // the whole match: nothing else ever moves the other side's st out of 'result' for a Hit & Pitch defender (tick()'s own auto-trigger requires
+ // st==='wait' before it will even call enterPitchPick() again), so if this write happens to fail on a flaky connection (far more likely on wifi/
+ // cellular than the wired-PC-to-PC case that never showed this), that player is stuck looking at a stale result with no way to pitch again, and
+ // has no way to know the batter already moved on -- exactly the "pitcher never got it cleared until something else happened" report. Tracking it
+ // here starts a resend loop (see tick()'s own check further down, and applyNetAdvanceAck()) that keeps re-sending this exact signal every ~1.5s
+ // until the other side actually confirms receipt, rather than sending it once and hoping.
+ // v390b: was `iAmBatting()` here -- but iAmBatting() reads the LIVE battingTeam, and when this very press just completed a half/inning flip (the
+ // `if(outs>=3)` block above already reassigned battingTeam a few lines up), this player is now the NEW PITCHER, not the batter any more, so a
+ // fresh iAmBatting() check here comes back false EVERY time a flip happens -- meaning 'advance' silently never got sent for exactly the one case
+ // that most needed it. This is the exact same class of bug v346's own wasOnlineBatter capture (above, for endGame()'s broadcast) already exists
+ // to avoid, for the identical reason: "the half/inning flip just below reassigns battingTeam... iAmBatting() checking the WRONG team". The
+ // concrete symptom reported: after a half-inning flip, the new pitcher (this client, having already locally flipped) could select a pitch type,
+ // aim, and even hold the load meter before the new batter (the other client, still sitting on the mirrored result from the play that ended the
+ // last half, now never told to clear it) had any idea a new half had even started -- "the new pitcher select a pitch and even set location and
+ // start meter before the next batter clears the last result". wasOnlineBatter was captured at the very top of this function, before the flip, so
+ // it still correctly answers "was I the one who just cleared a result by pressing continue" regardless of whether that press also happened to
+ // end the half -- using it here (instead of a fresh, now-stale, iAmBatting()) means the other side's result reliably gets told to clear on every
+ // single press that clears one, flip or no flip.
+ if(onlineActive&&wasOnlineBatter){netSend('advance',{});advPendingSince=n;advLastSentAt=n;advResendCount=0}
 }
 function press(src){
  if(!gameStarted||paused||holdNext)return; // v341: !gameStarted&& added -- see its declaration
@@ -2653,13 +2717,24 @@ $('ssOnlineStartBtn').onclick=showTutorial;
 // capability -- see that block's own comment for why. Still connection/presence ONLY: Start begins each side's own independent local game, same
 // scope limit as before (synced gameplay is a later phase).
 let olMatchCode=null,olRole=null,olUnsub=null,olAutoStarted=false,onlineActive=false,lastEvSeq=0,olPeerReady=false,olMyReady=false,netPendingContact=null,netPendingResult=null;
+let advPendingSince=0,advLastSentAt=0,advResendCount=0; // v390: see continuePress()'s netSend('advance',...) call and applyNetAdvanceAck()'s own
+// comment for why 'advance' specifically needs a real acknowledgment/resend loop, unlike every other online event.
 let oppHitAndPitch=false; // v356: the OPPONENT's own Hit & Pitch choice (read from the match doc, written once at host/join time -- see
 // olHostMatch()/olJoinMatch()'s watch callbacks and hostMatch()/joinMatch()'s own new argument) -- myTeam() is fixed for the whole match, so
 // "the opponent" always means the same physical player regardless of which side is currently batting; no need to track it per-side.
-const NET_DELAY=0.22; // v317: how much longer the SPECTATING side's windup/pitch replay runs behind the batting side's own real-time clock -- pure
-// buffer/slack so the eventual swing/result packet (small Firestore round-trip) always has time to arrive before the spectator's replay reaches the
-// point it would matter. Only ever applied on the non-batting side (see applyNetPitchStart()) -- the batting player's own screen is never delayed,
-// same timing as offline. Picked as a first guess comfortably above typical Firestore round-trip latency; may need tuning once tested live.
+const NET_DELAY_MIN=0.22,NET_DELAY_MAX=1.6; // v390: NET_DELAY used to be one fixed guess (0.22s, "comfortably above typical Firestore round-trip
+// latency" -- but never actually measured against a real one). That's fine on two fast machines on the same network (confirmed: two PC browser
+// tabs stay in sync), but a connection with real higher/more-variable latency -- an iPhone on cellular, or just subject to iOS's more aggressive
+// background throttling of network/timers even while the tab is technically active -- can easily exceed a flat 220ms, especially across the
+// MULTIPLE sequential events one pitch involves (pitchStart, loadStart, swing, contact, result -- see their own netSend() call sites). When that
+// happens, the spectating/pitching side's local windup+flight animation (which runs on a pure local clock, independent of whether the data has
+// actually arrived) finishes BEFORE the real contact/result packet shows up -- exactly "you see the pitch finish delivering and then it's hit
+// after that". Fixed by measuring real latency instead of guessing it (see netLatencyEstMs below) and clamping the result to this range: never
+// below the original 0.22s baseline (no regression on a fast connection), never above 1.6s (a genuinely dead connection should fail visibly
+// rather than the pitcher staring at a windup for a S-car-go-length pause).
+let netLatencyEstMs=NET_DELAY_MIN*1000; // v390: rolling estimate of real one-way network latency, updated from every event (see processNetEvLog()'s
+// own comment for how) -- not a fixed guess any more. Decays slowly back toward the baseline after a connection improves, but jumps UP immediately
+// on a single slow event, since a pitch's worth of buffer has to be sized for the next (unknown) packet, not the average of ones already survived.
 // v316: once the other side's presence flips true, the game now jumps straight
 // into the tutorial/game itself rather than just revealing a Start button someone still has to click -- being matched IS being ready here, there's
 // no separate lobby-chat step this would be protecting. olAutoStarted guards against onSnapshot firing more than once (it does, routinely) from
@@ -2672,6 +2747,7 @@ function olReset(){
  $('olHostBtn').classList.add('hidden');$('olJoinBtn').classList.add('hidden');
  $('olCode').textContent='----';$('olStatus').textContent='';$('olStatus2').textContent='';$('olJoinCode').value='';
  $('ssOnlineStartBtn').classList.add('hidden');olAutoStarted=false;onlineActive=false;lastEvSeq=0;olPeerReady=false;olMyReady=false;
+ advPendingSince=0;advLastSentAt=0;advResendCount=0; // v390: leaving/resetting online mode -- don't let a stale resend loop from a previous match bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -2775,7 +2851,18 @@ function processNetEvLog(evLog){ // v321: evLog is an append-only array (see YB_
  if(!evLog||!evLog.length)return;
  const mine=evLog.filter(e=>e&&e.from!==olRole&&e.seq>lastEvSeq).sort((a,b)=>a.seq-b.seq);
  if(mine.length)console.log('[wiffleball net] queuing '+mine.length+' new event(s):',mine.map(e=>e.type+'#'+e.seq).join(' | '),'(lastEvSeq was',lastEvSeq,')');
- for(const e of mine){lastEvSeq=e.seq;netEvQueue.push(e)}
+ for(const e of mine){
+  lastEvSeq=e.seq;netEvQueue.push(e);
+  // v390: measure REAL one-way latency for free off every event's own seq (the sender's Date.now() at send time -- see netSend()'s own comment).
+  // Measured the instant an event is first OBSERVED here, not when drainNetEvQueue() eventually gets around to applying it -- that part is
+  // deliberately paced/delayed on purpose (see its own comment) and would make the connection look far worse than it actually is. Clamped to a
+  // sane window: negative (clock skew/out-of-order) or implausibly huge (tens of seconds -- almost certainly a wrong device clock, not real
+  // network latency) readings are ignored rather than corrupting the estimate. Jumps up immediately on one slow event (the buffer for the NEXT
+  // pitch has to cover the next packet, not the average of ones already survived), decays only 30%/reading back toward the floor once things
+  // improve, so a brief one-off stall can't permanently inflate it either.
+  const lat=Date.now()-e.seq;
+  if(lat>=0&&lat<15000)netLatencyEstMs=Math.min(NET_DELAY_MAX*1000,Math.max(NET_DELAY_MIN*1000,Math.max(lat,netLatencyEstMs*0.7)));
+ }
  drainNetEvQueue();
 }
 // v322: nothing is dropped any more (see evLog above), but the realtime listener can still take a real moment to actually deliver an update -- if
@@ -2859,6 +2946,7 @@ function handleNetEvent(ev){
  else if(ev.type==='halfFlip')applyNetSnapshot(ev.data.state); // v319: just the state mirror -- no pitch/windup to set up, the next pitchStart (now correctly sent by whichever side this flip just put on the hook) will do that
  else if(ev.type==='gameOver')applyNetGameOver(ev.data);
  else if(ev.type==='advance')applyNetAdvance();
+ else if(ev.type==='advanceAck')applyNetAdvanceAck();
  else if(ev.type==='humanPitchChosen')applyNetHumanPitchChosen(ev.data);
  else if(ev.type==='loadStart')applyNetLoadStart();
 }
@@ -2882,7 +2970,20 @@ function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one
  startPitch(performance.now()/1000,{type:TYPES[d.tIdx],tx:d.tx,ty:d.ty});
 }
 function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-clearing -- see its comment for why this exists as its own instant event
- $('msg').textContent='';$('sub').textContent='';holdNext=false;ball.position.y=-9;shd.position.y=-9;st='wait';
+ // v390: ALWAYS ack receipt first, before anything else -- continuePress()'s own send keeps resending this exact signal every ~1.5s until it sees
+ // an ack arrive (see its own comment, and tick()'s resend check), specifically because a plain fire-and-forget send of this one event can
+ // otherwise wedge the whole match with no self-correction. Acking unconditionally, even on a stale/duplicate resend (see the guard just below),
+ // is what lets that loop terminate reliably even if an EARLIER ack attempt from this same side got lost too -- every resend is another chance
+ // for the ack to get through, and the other side can't tell a "first ever advance" from a "resend" apart (seq is just whichever sender's local
+ // counter, not a dedicated retry flag), so acking every single delivery, not just the first, is what actually closes the loop.
+ if(onlineActive)netSend('advanceAck',{});
+ // v390: a RESEND can legitimately arrive after we've already moved on past 'result' on our own (e.g. our own first copy of this exact event did
+ // arrive and get applied, but our ack back to the batter happened to be the one that got lost) -- in that case this is a stale duplicate, and
+ // blindly re-running the reset below would be actively destructive: it would yank us OUT of whatever we've already correctly moved into (mid
+ // pitch-pick, already loading a pitch, even mid-windup of the pitch that followed), snapping the ball off-screen and resetting st='wait' out from
+ // under an in-progress play. Only perform the actual transition the FIRST time, while we're still sitting on the result it's meant to clear.
+ if(st!=='result')return;
+ $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';holdNext=false;ball.position.y=-9;shd.position.y=-9;st='wait';
  // v387: this used to leave tNext completely untouched -- the only thing that HAD set it was applyNetResultNow()'s own `tNext=now+1.8` (how long
  // the result stays up), anchored to when the RESULT arrived, not to when 'advance' does. tick()'s own auto-pitch-trigger gates purely on
  // `now>=tNext`, so a defending Hit & Pitch player's next pick phase ended up gated behind whatever was left of that unrelated 1.8s timer --
@@ -2893,6 +2994,8 @@ function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-cleari
  // regardless of how fast or slow the batter was.
  tNext=performance.now()/1000+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN);
 }
+function applyNetAdvanceAck(){advPendingSince=0} // v390: batting-client only -- the other side just confirmed it actually received (and, the first
+// time, applied) our 'advance'. Stops continuePress()'s resend loop (see tick()'s own check) from sending any more copies of it.
 function applyNetGameOver(d){ // v319: mirrors endGame()'s own UI update -- the spectator never ran endGame() itself (it has no local score logic to
  // trust), so this is spelled out the same way rather than recomputing winner/extras locally from (now-synced) scoreRed/scoreBlue.
  applyNetSnapshot(d.state);
@@ -2929,8 +3032,8 @@ function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s stat
  netPendingContact=null;netPendingResult=null; // v330/v365: clear any contact/result event left over from the previous pitch that never got
  // applied (e.g. result arrived first, or this pitch's own no-contact result got the safety-net fallback) -- otherwise it could misfire against
  // this new pitch's own tRel/tau timeline
- tRel=now+C.WIND+3/30+NET_DELAY;st='windup';
- $('msg').textContent='';$('sub').textContent='';
+ tRel=now+C.WIND+3/30+netLatencyEstMs/1000;st='windup'; // v390: was the fixed NET_DELAY guess -- see its own comment (now NET_DELAY_MIN/MAX) for why this now tracks real measured latency instead
+ $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
 }
 function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's swing start time, expressed relative to THAT pitch's own tRel, so it
  // carries over correctly onto the spectator's own (NET_DELAY-shifted) tRel and the swing animates in the same relative position in the pitch.
@@ -3291,7 +3394,11 @@ function tryContact(t){
 }
 // ---- results ----
 const CONTINUE_HINT=' — B / Right-click / Alt for next pitch'; // the dedicated continue input (continuePress()), never load/swing -- see press()/continuePress()
-function say(m,s,col){updateScout(m);m=updateCount(m);$('msg').textContent=m;$('msg').style.color=col||'#fff';$('sub').textContent=s||'';updSB();tNext=performance.now()/1000+1.8;st='result';holdNext=true;
+function say(m,s,col){updateScout(m);m=updateCount(m);$('msg').textContent=m;$('msg').style.color=col||'#fff';$('sub').textContent=s||'';
+ // v390b: always set the always-visible continue-hint here, in the one shared place every result funnels through -- regardless of dbgOn, unlike
+ // #sub's own detail text (see #contHint's own CSS comment for the full why).
+ $('contHint').textContent=CONTINUE_HINT.replace(/^ — /,'');
+ updSB();tNext=performance.now()/1000+1.8;st='result';holdNext=true;
  if(P)$('lastPitch').textContent=`Last Pitch: ${P.t.n} ${(P.sp*2.237).toFixed(0)}mph`;
  if(onlineActive&&iAmBatting())netSend('result',{msg:m,sub:s,col,contacted,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
  // v328: `contacted` added -- see applyNetResult()'s own comment for why
@@ -3621,7 +3728,18 @@ function cycleAmb(){ambSel=(ambSel+1)%AMB_LEVELS.length;if(amb)amb.out.gain.setT
 document.addEventListener('visibilitychange',()=>{if(!actx)return;if(document.hidden)actx.suspend();else actx.resume()});
 addEventListener('pointerdown',audioInit,{once:true});addEventListener('keydown',audioInit,{once:true});
 function loop(){requestAnimationFrame(loop);try{tick()}catch(e){console.log('[wiffleball] tick() threw:',e,'| st was',st,'onlineActive',onlineActive,'iAmBatting',onlineActive&&typeof iAmBatting==='function'&&iAmBatting());$('msg').style.color='#f88';$('msg').textContent='Error';$('sub').textContent=e.message+' '+((e.stack||'').split('\n')[1]||'');st='wait';tNext=performance.now()/1000+3;last=performance.now()/1000}}
-function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchToggle();pollOnlinePitchStick();if(paused){if(gameVisualsOn())ren.render(sc,cam);return}const now=performance.now()/1000;const dt=Math.min(0.05,now-last);
+function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchToggle();pollOnlinePitchStick();
+ // v390: resend 'advance' until acknowledged (see continuePress()'s and applyNetAdvanceAck()'s own comments for the full why) -- checked even while
+ // paused (the OTHER player isn't necessarily paused too, and there's no cost to letting this keep trying in the background). Every ~1.5s, as long
+ // as advPendingSince is still set (cleared the instant applyNetAdvanceAck() fires), re-send with a fresh seq -- a duplicate is harmless on the
+ // receiving end now that applyNetAdvance() itself guards against re-applying once past 'result'. Capped at 15 attempts (~22s) -- well past any
+ // transient blip, so by then the connection is either genuinely down (nothing left to do but keep the game paused-looking until it recovers) or
+ // the other player has left; either way, hammering Firestore forever past that point buys nothing.
+ if(onlineActive&&advPendingSince){
+  const nowAdv=performance.now()/1000;
+  if(nowAdv-advLastSentAt>1.5&&advResendCount<15){netSend('advance',{});advLastSentAt=nowAdv;advResendCount++}
+ }
+ if(paused){if(gameVisualsOn())ren.render(sc,cam);return}const now=performance.now()/1000;const dt=Math.min(0.05,now-last);
  if(gameStarted&&st==='wait'&&now>=tNext&&!gameOver){
   // v349: human pitching, LOCAL -- the side NOT batting is the one on defense; if that side is both claimed by a device that can actually pitch
   // (pitchCapable() -- gamepad, mouse, or touch, see v381) and has Hit & Pitch on, hand the next pitch to its own player instead of auto-starting
