@@ -416,6 +416,22 @@ window.YB_FB={
  // still sitting in the lobby, or mid-game -- no separate mid-game sync channel needed.
  async updateSettings(code,settings){
   try{await updateDoc(doc(db,'matches',code.toLowerCase()),{settings})}catch(e){console.log('[wiffleball fb] updateSettings failed:',e)}
+ },
+ // v398: a real request -- "is there a message we can send there and back that doesn't have to do with the game events at a point in time that
+ // doesn't disrupt the key events... so we aren't thrown off by plays of different lengths". Every latency measurement up to now rides on top of
+ // a gameplay event (a pitch starting, an advance being acked) -- fine in principle (each one really is timed against this device's own clock,
+ // see feedLatencySample()'s own comment), but it inherits that event's own real-world timing quirks as noise: how long a hit flight took to
+ // land, how far apart two plays happened to be, whatever pacing drainNetEvQueue() added on top (the exact v397 bug, just fixed). A plain,
+ // periodic ping/pong, sent on a fixed timer with no connection to anything happening in the game, can't inherit ANY of that -- there's nothing
+ // for it to be thrown off by. Deliberately NOT routed through evLog/arrayUnion (that's an ever-growing, ordered log meant for events that have
+ // to be replayed in sequence and never missed) -- a ping is neither: only the LATEST value ever matters, so these are two plain overwritten
+ // fields instead, same pattern 'host.present'/'join.present' already use. Each side only ever writes the field named after its OWN role,
+ // exactly like every other write in this object.
+ async sendPing(code,role,t){
+  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'Ping']:t})}catch(e){}
+ },
+ async sendPong(code,role,t){
+  try{await updateDoc(doc(db,'matches',code.toLowerCase()),{[role+'Pong']:t})}catch(e){}
  }
 };
 window.dispatchEvent(new Event('yb-fb-ready'));
@@ -434,7 +450,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v397'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v398'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -2798,6 +2814,37 @@ let netWakeGraceUntil=0; // v397: see visibilitychange's own comment -- a wall-c
 // (seq-based AND both skew-free RTT ones) skips feeding while Date.now() is still before this, not just once on the first reading after waking --
 // a whole BACKLOG of queued events can land together right after a real lock-screen/background pause, and every one of them has this same
 // "looks like huge latency, is actually just us having been asleep" shape, not only the first.
+let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // v398: see startPingHeartbeat()'s own comment -- a periodic
+// ping/pong, completely decoupled from any gameplay event, so its own RTT can never inherit a play's own timing (a long hit flight, pacing
+// between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
+// echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
+// unchanged field don't re-send an echo or re-feed the same sample over and over.
+function startPingHeartbeat(){ // v398: called the instant onlineActive actually flips true (both sides present) -- see its two call sites
+ // (olHostMatch()/olJoinMatch()'s own watch() callbacks). A fixed 2s cadence: frequent enough to track a connection that's actually degrading
+ // mid-match, infrequent enough not to meaningfully add to the match doc's write volume on top of real gameplay events.
+ stopPingHeartbeat();
+ pingTimer=setInterval(()=>{
+  if(!onlineActive||!olMatchCode||!olRole||!window.YB_FB)return;
+  myLastPingSent=performance.now()/1000;
+  window.YB_FB.sendPing(olMatchCode,olRole,myLastPingSent);
+ },2000);
+}
+function stopPingHeartbeat(){if(pingTimer){clearInterval(pingTimer);pingTimer=null}}
+function processPingPong(data,peerRole){ // v398: called from both olHostMatch()/olJoinMatch()'s own watch() callbacks on every snapshot --
+ // `olRole` is always OUR OWN role here, `peerRole` the other one. Two independent halves: (1) echo the peer's ping straight back the instant we
+ // see a NEW value (not a repeat delivery of one we've already echoed) -- this side contributes nothing to its own latency measurement, it's
+ // purely in service of the PEER's own RTT; (2) recognize the peer's echo of OUR OWN last ping and, if it's the latest one (not a stale echo of
+ // an earlier round still catching up), feed the round trip in exactly like applyNetAdvanceAck()/applyNetPitchStart() already do -- same clock
+ // (our own), same clock-skew-free reasoning, same netWakeGraceUntil guard (a ping/pong round trip that happened to span our own lock-screen/
+ // background pause has the identical "looks slow, is really just us having been asleep" shape as any other source).
+ const peerPing=data[peerRole+'Ping'];
+ if(peerPing!=null&&peerPing!==lastPeerPingEchoed){lastPeerPingEchoed=peerPing;window.YB_FB.sendPong(olMatchCode,olRole,peerPing)}
+ const peerPong=data[peerRole+'Pong'];
+ if(peerPong!=null&&peerPong!==lastPeerPongSeen){
+  lastPeerPongSeen=peerPong;
+  if(peerPong===myLastPingSent){const rtt=performance.now()/1000-peerPong;if(rtt>=0&&rtt<15&&Date.now()>=netWakeGraceUntil)feedLatencySample(rtt*500)}
+ }
+}
 function feedLatencySample(ms){ // v390b: the one place netLatencyEstMs ever actually changes, fed from TWO different sources now -- see
  // processNetEvLog()'s own call (clock-skew-vulnerable: trusts the sender's device clock) and applyNetAdvanceAck()'s own call just below (clock-
  // skew-FREE: both timestamps it compares are this device's own clock, so a disagreeing iPhone/PC clock can't hide a real slow connection from
@@ -2837,6 +2884,7 @@ function olReset(){
  pitchChosenSentAt=0; // v394: same reasoning -- don't let a never-echoed humanPitchChosen timestamp from a previous match bleed into the next one
  netPendingHumanPitch=null; // v395: same reasoning -- don't let a stashed-but-never-consumed early pitch choice from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
+ stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -2889,9 +2937,10 @@ async function olHostMatch(code,statusEl){
   console.log('[wiffleball fb] match doc:',data);
   console.log('[wiffleball net] evLog ('+((data.evLog||[]).length)+' total):',(data.evLog||[]).map(e=>e&&(e.type+'#'+e.seq+' from '+e.from)).join(' | '));
   processNetEvLog(data.evLog);
+  processPingPong(data,'join'); // v398: see its own comment
   oppHitAndPitch=!!data.awayHitAndPitch; // v356: host's opponent is always the joiner/away side -- keep this live (not just read once) in case they flip their toggle before locking in
   if(data.joinReady)olPeerReady=true; // v318: the joiner's own beginGame() click, mirrored here so the host doesn't throw a pitch before the joiner's screen has actually unpaused
-  if(data.join&&data.join.present){statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;showTutorial()}}
+  if(data.join&&data.join.present){statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;startPingHeartbeat();showTutorial()}}
   else{statusEl.textContent='Waiting for opponent...';$('ssOnlineStartBtn').classList.add('hidden')}
  });
 }
@@ -2912,10 +2961,11 @@ async function olJoinMatch(code,statusEl){
   console.log('[wiffleball fb] match doc:',data);
   console.log('[wiffleball net] evLog ('+((data.evLog||[]).length)+' total):',(data.evLog||[]).map(e=>e&&(e.type+'#'+e.seq+' from '+e.from)).join(' | '));
   processNetEvLog(data.evLog);
+  processPingPong(data,'host'); // v398: see its own comment
   if(data.settings){pitcherMode=data.settings.pitcherMode??pitcherMode;pitchLocMode=data.settings.pitchLocMode??pitchLocMode;inningsMode=data.settings.inningsMode??inningsMode;refreshSettingsLabels()} // v335: adopt the host's chosen game settings -- see hostMatch()'s own comment for why these ride along on the match doc itself
   oppHitAndPitch=!!data.homeHitAndPitch; // v356: joiner's opponent is always the host/home side -- kept live for the same reason as the host-side branch above
   if(data.hostReady)olPeerReady=true; // v318: the host's own beginGame() click, mirrored here so the joiner doesn't throw a pitch before the host's screen has actually unpaused
-  if(data.host&&data.host.present){statusEl.style.color='';statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;showTutorial()}}
+  if(data.host&&data.host.present){statusEl.style.color='';statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;startPingHeartbeat();showTutorial()}}
   else{statusEl.textContent='Waiting for host...';$('ssOnlineStartBtn').classList.add('hidden')}
  });
 }
