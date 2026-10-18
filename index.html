@@ -2837,7 +2837,8 @@ let pingTimer=null,myLastPingSent=0,lastPeerPingEchoed=0,lastPeerPongSeen=0; // 
 // between replayed events, etc.) as noise. myLastPingSent is OUR OWN last-sent ping value (performance.now()), used to recognize the matching
 // echo when it comes back; lastPeerPingEchoed/lastPeerPongSeen are purely de-dupe guards so repeated Firestore snapshots carrying the same
 // unchanged field don't re-send an echo or re-feed the same sample over and over.
-let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1; // v403: see sendSwingDbgIfOnline()'s own comment -- swingDbgSeqCounter is OUR OWN incrementing
+let swingDbgSeqCounter=0,lastPeerSwingDbgSeq=-1,netPendingSwingDbg=null; // v403b: netPendingSwingDbg -- see processSwingDbg()'s own comment for
+// why the received payload is stashed here rather than applied immediately; swingDbgSeqCounter is OUR OWN incrementing
 // counter (a plain overwritten object comes back as a brand-new JS object on every snapshot, never reference-equal, so a seq number is the only
 // reliable way to tell "this is the same pitch's data again" from "this is a new pitch's data"); lastPeerSwingDbgSeq is that same de-dupe guard
 // on the receiving (spectator's) side.
@@ -2917,14 +2918,30 @@ function sendSwingDbgIfOnline(){ // v403: a real report -- "we still see bogus d
  swingDbgSeqCounter++;
  window.YB_FB.sendSwingDbg(olMatchCode,olRole,{seq:swingDbgSeqCounter,hasSwing:!!snap,a:snap?snap.a:null,bx:snap?snap.ball[0]:null,bz:snap?snap.ball[1]:null,hit:snap?snap.hit:false,lines:resLines.slice()});
 }
-function processSwingDbg(data,peerRole){ // v403: called from both olHostMatch()/olJoinMatch()'s own watch() callbacks, same as processPingPong()
+function processSwingDbg(data,peerRole){ // v403b: called from both olHostMatch()/olJoinMatch()'s own watch() callbacks, same as processPingPong()
  // -- see sendSwingDbgIfOnline()'s own comment for the full report. Only ever meaningful for the spectator: the real batter already has their
  // own correct, live version of all of this, so overwriting it with a (slightly delayed, network-round-tripped) copy of itself would be a pure
  // downgrade for them, never an improvement.
+ // v403b: a real worry, raised before this ever shipped -- the OLD bug class where the pitch speed/mph got shown on the pitcher's screen before
+ // the pitch itself had actually arrived. Applying this the INSTANT it's observed here (as v403 first did) is exactly that same class of mistake:
+ // this write and the official 'result' event are two separate, independently-timed network writes, so this one can easily arrive (and used to
+ // get applied) before the spectator's own screen has actually finished showing the swing/flight -- freezing the minimap on the real outcome
+ // while the pitch is still visibly in the air or the bat is still mid-swing on THIS screen. So this only STASHES the payload now; the actual
+ // reveal is applyNetResultNow()'s job (below), the same already-paced, already-battle-tested moment ('result' events, both the hit and the
+ // no-contact kind, only ever surface there -- see applyNetResult()'s own long comment for why that timing was hard-won) that already decides
+ // exactly when a result is allowed to become visible on this screen at all. Piggybacking on that one spot means this can never show up any
+ // sooner than the real outcome itself does.
  if(iAmBatting())return;
  const d=data[peerRole+'SwingDbg'];
  if(!d||d.seq===lastPeerSwingDbgSeq)return;
  lastPeerSwingDbgSeq=d.seq;
+ netPendingSwingDbg=d;
+}
+function applyPendingSwingDbg(){ // v403b: the actual reveal, called only from applyNetResultNow() (see processSwingDbg()'s own comment for why
+ // it has to be there and nowhere earlier) -- turns the stashed payload into the same snap/resLines shape the real batter's own tryContact()/
+ // showDbg() would have produced, at the exact instant the spectator's own screen is first allowed to show this pitch's outcome at all.
+ if(!netPendingSwingDbg)return;
+ const d=netPendingSwingDbg;netPendingSwingDbg=null;
  snap=d.hasSwing?{a:d.a,path:path.slice(),ball:[d.bx,d.bz],hit:d.hit}:null;
  resLines=d.lines||[];
 }
@@ -2969,7 +2986,7 @@ function olReset(){
  netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
- swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1; // v403: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state bleed into the next one
+ swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null; // v403/v403b: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -3328,7 +3345,9 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  P={t,sp:d.sp,T:d.T,a:new THREE.Vector3(d.a.x,d.a.y,d.a.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),ph:d.ph,tx:d.tx,ty:d.ty,inZ:d.inZ};
  if(d.kx){P.kx=d.kx;P.ky=d.ky;P.dxT=d.dxT;P.dyT=d.dyT}
  const now=performance.now()/1000;
- stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];
+ stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null; // v403b: don't let a
+ // stale, never-consumed swing-debug payload from a previous pitch bleed into this one -- applyNetResultNow() should always consume it first in
+ // practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own equivalents here.
  contacted=missed=false;swungFor=false;landed=false;first=null;maxD=0;crossed=null;peak=0;fairDec=null;trk.length=0;swinging=false;
  // v402: a real report -- "on the pitcher's machine, a swing and a miss leaves the white trail on screen until the next pitch, and a line draws
  // from the previous hit ball's position to the pitcher before the new trajectory draws -- like it's showing the path it took to warp from the
@@ -3488,6 +3507,9 @@ function applyNetResultNow(d){ // spectator only -- the actual state-transition 
   if(sb){const s=actx.createBufferSource(),g=actx.createGain();s.buffer=sb;g.gain.value=.9;s.connect(g);g.connect(actx.destination);s.start()}
  }
  applyNetSnapshot(d.state);
+ // v403b: reveal whatever swing/contact debug data arrived for this pitch at the exact same instant the result itself becomes visible, not
+ // before -- see processSwingDbg()'s own comment for the full reasoning (the old "saw the pitch/mph before the pitch arrived" bug class).
+ applyPendingSwingDbg();
  $('msg').textContent=d.msg||'';$('msg').style.color=d.col||'#fff';$('sub').textContent=d.sub||'';
  // v332: don't force `swinging` off here either -- same reasoning as startNetHit() above. A quick-settling play (e.g. a routine grounder) can have
  // its 'result' event arrive well before the swing's own natural duration (tick()'s `ts+C.SW+0.45` timeout) has elapsed, so forcing it false here
@@ -4368,10 +4390,12 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
    if(!first&&H.p.y>0.08)H.wasG=false}
   ball.position.copy(H.p);shd.position.set(H.p.x,0.015,H.p.z);if(H.p.z>-4&&H.p.z<1.5&&path.length<600)path.push([H.p.x,H.p.z]);trailPts.push(H.p.clone());if(trailPts.length>24)trailPts.shift();setTrail();
   if(st==='x'){if(!first)first={p:H.p.clone(),d:Math.hypot(H.p.x,H.p.z),peak,t:H.t};endHit();
-   // v403: showDbg() here used to run unconditionally -- harmless on the real batter (its own correct swingInfo), but on the spectator it
-   // recomputes its OWN (always empty -- swingInfo is never populated for them) "No swing" result and resLines=[], immediately clobbering
-   // whatever the network just supplied via processSwingDbg() the instant their own replayed flight settles -- exactly the moment they'd be
-   // looking at it. Only the real batter still needs this call at all; the spectator's version of the debug panel comes from the network now.
+   // v403/v403b: showDbg() here used to run unconditionally -- harmless on the real batter (its own correct swingInfo), but on the spectator it
+   // recomputes its OWN (always empty -- swingInfo is never populated for them) "No swing" result and resLines=[]. The real network-supplied
+   // result isn't even revealed yet at this exact instant (v403b: that only happens later, inside applyNetResultNow() -- see
+   // processSwingDbg()'s own comment for why), so this is really just about not flashing "No swing" on the spectator's panel for the brief
+   // moment between their own flight settling and the real result actually arriving/being allowed to show. Only the real batter still needs
+   // this call at all; the spectator's version of the debug panel comes from the network, on its own paced schedule.
    if(!iAmSpectating)showDbg();
    sendSwingDbgIfOnline()}}
  if(st==='result'&&now>=tNext&&!holdNext){ball.position.y=-9;shd.position.y=-9;trailPts.length=0;setTrail();st='wait';tNext=now+IDLE_MIN+Math.random()*(IDLE_MAX-IDLE_MIN)} // random idle stretch before the next windup starts (see IDLE_MIN/IDLE_MAX) -- was a flat 0.6s, which both felt instant off a button press and let a batter learn its rhythm
