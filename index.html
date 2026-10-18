@@ -385,7 +385,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v387'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v388'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
 // non-functional `room` capability, so Local/Online is reachable again for testing. Flip back to false any time to return to the simplified flow.
@@ -1361,6 +1361,12 @@ function commitHumanPitch(hold){ // v352/v364: release COMMITS the outcome (accu
  // comment), then plays one normal windup once you've committed, whether that commit came from a real release or the auto-release at the bottom.
  if(onlineActive){
   P=null;st='wait';
+  // v388: push tNext safely past any realistic network round trip. Left untouched, it still held whatever stale value was last set BEFORE this
+  // pick/aim interaction even began (which takes real seconds of play) -- so tick()'s own auto-pitch-trigger saw st==='wait' && now>=tNext true
+  // on literally the very next frame and called enterPitchPick() a second, premature time, reopening #pitcherOverlay (already correctly hidden
+  // two lines above this) before the real pitchStart echo had any chance to arrive. See applyNetPitchStart()'s own defensive hide below for why
+  // that premature reopen then had nothing left to ever close it again.
+  tNext=performance.now()/1000+3;
   netSend('humanPitchChosen',{tIdx:TYPES.indexOf(type),tx,ty});
   return;
  }
@@ -2903,6 +2909,15 @@ function applyNetPitchStart(d){ // spectator only -- mirrors startPitch()'s stat
  // the echo of a pitch THIS client had already started playing live itself) no longer applies -- the defending client never plays any windup of
  // its own online any more; this is the only place it ever sees one start, exactly like watching the opponent's CPU defense always worked.
  applyNetSnapshot(d.state);
+ // v388: unconditionally tear down any pitcher pick/aim overlay state here, regardless of iAmBatting() -- a pitch starting means pick/aim is over
+ // for EVERY client, pitcher and defender alike. applyNetSnapshot()'s own v365 guard above only does this when this client discovers it's newly
+ // the BATTER while still mid-pick -- so if commitHumanPitch()'s premature-reentry bug (see its own v388 comment) reopened #pitcherOverlay on the
+ // DEFENDING client while waiting for this very echo, that guard never catches it (iAmBatting() is false the whole time this client is pitching),
+ // and nothing closes the overlay for the rest of the pitch/result -- or even into the next half-inning once this player becomes the batter,
+ // since by then st is no longer pitchPick/pitchAim either. Closing it here, every time a pitch actually starts, makes that race harmless even if
+ // some other path ever reintroduces it.
+ $('pitcherOverlay').classList.add('hidden');
+ pitchPickSide=null;pitchPickIdx=null;pitchPickLockedType=null;pitchAimLoading=false;
  const t=TYPES[d.tIdx];
  P={t,sp:d.sp,T:d.T,a:new THREE.Vector3(d.a.x,d.a.y,d.a.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),ph:d.ph,tx:d.tx,ty:d.ty,inZ:d.inZ};
  if(d.kx){P.kx=d.kx;P.ky=d.ky;P.dxT=d.dxT;P.dyT=d.dyT}
