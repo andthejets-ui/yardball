@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v414'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v415'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4398,6 +4398,10 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  else{uC=loading?hold:Math.max(0,uC-dt*1.6);const f=1-Math.exp(-8*dt);visA+=(A_REST-visA)*f;visEl+=(elAt(Math.min(uC,1))-visEl)*f;hp=handsAt(uC);dispA=visA}
  if(swinging&&frozenS===null&&sD<1.3&&now-lastFan>.007){recFan(hp,dirAt(visA,visEl));lastFan=now}
  updateKidBatter(dt,sD); // moved before the bat-positioning block below so the bat always reads this frame's just-updated hand bone pose, not last frame's stale one -- fixes a one-frame lag that was most visible during sudden transitions like the hold-to-idle pop
+ // v415: live on-screen readout (revives the old "KID BATTER LIVE" diagnostic, scoped down to just what the restride hunt needs) so a screen
+ // recording captures the actual internal state in the SAME frame as whatever the eye sees -- no more cross-referencing a separate console copy
+ // against video timestamps by hand. Only touches #dbg's text when Debug is on, so normal play is completely unaffected either way.
+ if(dbgOn&&kidBatReady&&kidBatAction)$('dbg').textContent='kidBat ph='+kidBatPhase+' t='+kidBatAction.time.toFixed(3)+' ld='+(loading?1:0)+' sw='+(swinging?1:0)+' ck='+(checked?1:0)+' lA='+(kidBatLoadActive?1:0)+' st='+st+' hb='+(kidBatHandBoneL?1:0)+' rig='+((typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root)?'bat':'pit');
  { // hand-following during load and follow-through (both looked good visually), procedural physics-accurate arc only for the approach-to-contact window (load-end through the flat/contact-aligned point), where "can hit anywhere along the swing plane" needs to be preserved
   // simplified: no more multi-frame slerp blend (recomputing a moving target quaternion every frame and slerping toward it was unstable -- the shortest-path choice could effectively flip between frames, causing the shaking/jumping). Instead: keep hand-following for the first few animation frames of the swing (roughly frame 30->31.7), then one single, direct switch to the procedural arc with no blend at all.
   const __useHand=kidBatReady&&kidBat&&(kidBatPhase===0||kidBatPhase===1||(kidBatPhase===2&&kidBatAction.time>=kidBatDynContact));
