@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v409'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v410'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -968,7 +968,14 @@ function __showDiagAlways(text){ // same look as __showDiag, but ignores __DIAG_
  const wrap=document.createElement('div');wrap.style.cssText='background:#000c;color:#0f0;font:11px monospace;padding:8px;max-width:300px;border-radius:6px';const pre=document.createElement('div');pre.style.cssText='white-space:pre-wrap';pre.textContent=text;wrap.appendChild(pre);__diagContainer().appendChild(wrap);return wrap}
 const __DIAG_ENABLED=false; // gates the one-off/recurring startup+per-pitch __showDiag calls (clip/skin/bone checks, release position check, etc) -- left off so those don't clutter the screen. The live batter phase/action.time readout below has its own always-on element, independent of this flag.
 function __showDiag(text){if(!__DIAG_ENABLED)return null;const wrap=document.createElement('div');wrap.style.cssText='background:#000c;color:#0f0;font:11px monospace;padding:8px;max-width:300px;border-radius:6px';const pre=document.createElement('div');pre.style.cssText='white-space:pre-wrap';pre.textContent=text;const btn=document.createElement('button');btn.textContent='Copy debug';btn.style.cssText='margin-top:6px;font:11px monospace;background:#0f0;color:#000;border:none;border-radius:4px;padding:3px 8px;cursor:pointer';btn.onclick=()=>{navigator.clipboard.writeText(pre.textContent).then(()=>{btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy debug',1200)}).catch(()=>{btn.textContent='Copy failed';setTimeout(()=>btn.textContent='Copy debug',1200)})};wrap.appendChild(pre);wrap.appendChild(btn);__diagContainer().appendChild(wrap);return wrap}
-let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=false,kidBatPhase=0,kidBatIdleT=0,kidBatDiagFreeze=false,kidBatLiveDiagT=0,kidBatLiveDiagEl=null,kidBatHipBone=null,kidBatHandBoneR=null,kidBatHandBoneL=null,kidBatHoldT=0,kidBatCheckHoldT=0,kidBatSwingStartFrame=37/30,kidBatDynFlatS=0.859,kidBatDynContact=41/30,kidBatLoadActive=false,kidBatCheckActive=false,kidBatCheckJustEnded=false; // kidBatLoadActive tracks whether THIS load has already done its one-time reset/play -- separate from kidBatPhase because checked also leaves kidBatPhase at 1, so reusing `kidBatPhase!==1` as the loading branch's "just started" guard meant a new load begun right after a check swing was wrongly treated as already-in-progress and silently skipped its reset, leaving the clip frozen wherever the check-swing hold/ease had last left it instead of properly restarting the load animation. kidBatCheckActive is the equivalent one-time-init guard for the checked branch's own hold timer. kidBatCheckJustEnded flags the one frame where checked's hold naturally expired, so the idle branch's first frame (and ONLY that frame -- it clears itself immediately) can request the hand-bone blend via kidBatForceSnap; setting kidBatForceSnap directly at expiry doesn't work because that expiry frame still renders the checked pose itself (same source and target), consuming the flag a frame too early
+let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=false,kidBatPhase=0,kidBatIdleT=0,kidBatDiagFreeze=false,kidBatLiveDiagT=0,kidBatLiveDiagEl=null,kidBatHipBone=null,kidBatHandBoneR=null,kidBatHandBoneL=null,kidBatHoldT=0,kidBatCheckHoldT=0,kidBatSwingStartFrame=37/30,kidBatDynFlatS=0.859,kidBatDynContact=41/30,kidBatLoadActive=false,kidBatCheckActive=false,kidBatCheckJustEnded=false,netLoadSeedTime=null;
+// v410: netLoadSeedTime -- see applyNetLoadStart()'s own comment for the full report ("disconnect between the load/stride info and the swing" on
+// the pitcher's mirrored view online). When a 'loadStart' network event arrives carrying a real offset (how far into the pitch-relative timeline
+// the actual batter was when they pressed), this is set to the engine-clip-time the mirrored load animation should jump straight to -- reflecting
+// where the real batter's load truly is AT THE MOMENT we're finally rendering it, not "just started" from frame 0 the instant the event happened
+// to be delivered. Consumed exactly once, the very next time updateKidBatter()'s load branch does its one-time reset/play, then cleared. Stays
+// null (no-op) for every LOCAL load (the real batter's own, and the spectator's early-anticipatory stash case) -- only ever set by the one place
+// that has a real cross-client offset to seed from. // kidBatLoadActive tracks whether THIS load has already done its one-time reset/play -- separate from kidBatPhase because checked also leaves kidBatPhase at 1, so reusing `kidBatPhase!==1` as the loading branch's "just started" guard meant a new load begun right after a check swing was wrongly treated as already-in-progress and silently skipped its reset, leaving the clip frozen wherever the check-swing hold/ease had last left it instead of properly restarting the load animation. kidBatCheckActive is the equivalent one-time-init guard for the checked branch's own hold timer. kidBatCheckJustEnded flags the one frame where checked's hold naturally expired, so the idle branch's first frame (and ONLY that frame -- it clears itself immediately) can request the hand-bone blend via kidBatForceSnap; setting kidBatForceSnap directly at expiry doesn't work because that expiry frame still renders the checked pose itself (same source and target), consuming the flag a frame too early
 const KIDBAT_BAT_CORRECTION=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),Math.PI);
 const KIDBAT_HAND_OFFSET=new THREE.Vector3(0,2,0); // reduced from 5 -- the gap in screenshots suggests the offset was too large, pulling the grip point too far from where his hand actually is
 let kidBatWasHand=false,kidBatSnapT=1,kidBatSnapPos=new THREE.Vector3(),kidBatSnapQuat=new THREE.Quaternion(),kidBatHandQ=new THREE.Quaternion(),kidBatHandoffYaw=null,kidBatForceSnap=false; // kidBatForceSnap lets code elsewhere (the checked->idle handoff) request the snapshot-blend even when __useHand stays continuously true across the transition (so kidBatWasHand itself never flips false->true) -- kidBatWasHand gets reset to true every __useHand frame regardless, so it can't carry a cross-frame "please resnap" request on its own
@@ -1067,7 +1074,9 @@ function updateKidBatter(dt,sD){
  // removed from normal play. The debug frame scrubber below ([ / ] while paused) still creates/uses kidBatLiveDiagEl on demand if needed again.
  if(loading){
   kidBatCheckActive=false;kidBatCheckJustEnded=false;
-  if(!kidBatLoadActive){kidBatLoadActive=true;kidBatPhase=1;kidBatAction.reset();kidBatAction.timeScale=KIDBAT_LOAD_T/C.ST;kidBatAction.paused=false;kidBatAction.play()} // single consistent pace through the whole load, no separate slow creep -- the stride-timing mechanic already judges on-time vs early, so this doesn't need its own drift. Guarded by kidBatLoadActive, not kidBatPhase, so a load starting right after a check swing (which also leaves kidBatPhase===1) still gets its proper reset/play instead of inheriting the check-swing's frozen/interpolating clip time
+  if(!kidBatLoadActive){kidBatLoadActive=true;kidBatPhase=1;kidBatAction.reset();kidBatAction.timeScale=KIDBAT_LOAD_T/C.ST;kidBatAction.paused=false;kidBatAction.play()
+   if(netLoadSeedTime!==null){kidBatAction.time=netLoadSeedTime;netLoadSeedTime=null}} // v410: a network-mirrored load with a known real offset jumps straight to where the real load actually is right now, instead of always starting this ramp from frame 0 -- see netLoadSeedTime's own declaration comment
+   // single consistent pace through the whole load, no separate slow creep -- the stride-timing mechanic already judges on-time vs early, so this doesn't need its own drift. Guarded by kidBatLoadActive, not kidBatPhase, so a load starting right after a check swing (which also leaves kidBatPhase===1) still gets its proper reset/play instead of inheriting the check-swing's frozen/interpolating clip time
   kidBatMixer.update(dt);
   if(kidBatAction.time>=KIDBAT_LOAD_T){kidBatAction.paused=true;kidBatAction.time=KIDBAT_LOAD_T;kidBatMixer.update(0)}
  }else if(swinging){
@@ -1892,7 +1901,11 @@ function press(src){
   // 'checkSwing' existed as batter->spectator events, and both of those only ever CLEAR the spectator's own `loading` flag, never set it, so the
   // pitcher's screen just sat idle the whole time the batter was holding the load, then jumped straight to the swing animation. Tell the
   // spectator the instant the load actually begins, same instant as this local n/loadStart, so applyNetLoadStart() can mirror it.
-  if(onlineActive&&iAmBatting())netSend('loadStart',{});
+  // v410: now also carries `off` -- this press's own n, expressed relative to OUR OWN tRel, the exact same pattern release()'s own 'swing' netSend
+  // already uses for tsOff. Only meaningful when there's an actual pitch in flight to be relative TO (st windup/pitch, same guard
+  // applyNetLoadStart() itself uses to decide stash-vs-apply) -- an anticipatory load before our own windup has even started has no shared
+  // timeline to express an offset against yet, so that case still sends null and applyNetLoadStart() falls back to its existing stash behavior.
+  if(onlineActive&&iAmBatting())netSend('loadStart',{off:(st==='windup'||st==='pitch')?n-tRel:null});
  }}
 function release(){
  if(!gameStarted||paused)return; // v341: !gameStarted&& added -- see its declaration
@@ -3035,7 +3048,7 @@ function olReset(){
  netPendingSwing=null; // v400: same reasoning -- don't let a stashed-but-never-consumed early swing from a previous match bleed into the next one
  netWakeGraceUntil=0; // v397: same reasoning -- don't let a still-open post-wake grace window from a previous match suppress real latency samples in the next one
  stopPingHeartbeat();myLastPingSent=0;lastPeerPingEchoed=0;lastPeerPongSeen=0; // v398: same reasoning -- don't let the previous match's heartbeat (or its stale echo-tracking state) keep running/bleed into the next one
- swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false; // v403/v403b/v405/v406: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload/path snapshot/late-arrival window bleed into the next one
+ swingDbgSeqCounter=0;lastPeerSwingDbgSeq=-1;netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;netLoadSeedTime=null; // v403/v403b/v405/v406: same reasoning -- don't let a previous match's swing-debug seq counter/de-dupe state/stashed payload/path snapshot/late-arrival window bleed into the next one
  sideBind={red:null,blue:null};hitAndPitch={red:false,blue:false};cpuControlled={red:false,blue:false};olLocked={red:false,blue:false};
  olPickedSide=null;olPickCursor='red'; // v371: back to step 1 (both Pick buttons showing) on every fresh entry into online mode
  renderSideSelect();
@@ -3217,7 +3230,7 @@ function applyNetSnapshot(s){
  // already applies per-pitch (see applyNetPitchStart()'s own clears), just extended to the one boundary that could still outlive them.
  if(oldBattingTeam!==battingTeam){
   netPendingContact=null;netPendingResult=null;netPendingAdvance=false;netPendingSwing=null;netPendingLoadStart=false;netPendingHumanPitch=null;
-  netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;
+  netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;netLoadSeedTime=null;
  }
  if(rosterSwapped!==s.rosterSwapped){rosterSwapped=s.rosterSwapped;applyRosterLooks()}
  // v365: the pitch-pick overlay used to be able to survive a half-inning flip onto the player who was just defending. The race: continuePress()
@@ -3273,9 +3286,9 @@ function handleNetEvent(ev){
  else if(ev.type==='advance')applyNetAdvance();
  else if(ev.type==='advanceAck')applyNetAdvanceAck(ev._obs); // v397: ev._obs threaded through -- see applyNetAdvanceAck()'s own comment
  else if(ev.type==='humanPitchChosen')applyNetHumanPitchChosen(ev.data);
- else if(ev.type==='loadStart')applyNetLoadStart();
+ else if(ev.type==='loadStart')applyNetLoadStart(ev.data);
 }
-function applyNetLoadStart(){ // spectator only -- v365: mirrors press()'s own load-begin exactly (loading=true;loadStart=now), see its netSend
+function applyNetLoadStart(d){ // spectator only -- v365: mirrors press()'s own load-begin exactly (loading=true;loadStart=now), see its netSend
  // call's own comment for why this event exists at all. Guarded the same way applyNetSwing/applyNetCheckSwing already are against stale/
  // out-of-order delivery and against ever running on the batting client's own screen (it already has its own real `loading`, driven locally).
  if(iAmBatting())return;
@@ -3294,7 +3307,27 @@ function applyNetLoadStart(){ // spectator only -- v365: mirrors press()'s own l
  }
  if(loading||swinging)return; // already loading (a duplicate or late-arriving echo) or already mid-swing (a 'swing' event beat this one here,
  // e.g. reordered on a lossy connection) -- don't stomp a more-current state with a stale one
- loading=true;loadStart=performance.now()/1000;
+ const now=performance.now()/1000;
+ loading=true;loadStart=now;
+ // v410: "it feels like a disconnect between the load/stride info and the swing... maybe that disconnect leads to the bat not being seen where
+ // it should be" -- a real report of an animation-blend artifact (same family as the known offline check-swing issue) specifically on the
+ // pitcher's MIRRORED view online. Root cause: unlike 'swing' (which carries tsOff, letting applyNetSwing() place the swing at the correct point
+ // on the SHARED tRel-relative timeline regardless of delivery delay), this event used to carry no timing info at all -- updateKidBatter()'s
+ // load branch always starts its fixed-pace ramp toward the loaded pose from frame 0 the instant `loading` flips true locally, so however long
+ // THIS delivery happened to take (processing, drainNetEvQueue()'s own deliberate pacing, an ordinary busy moment), the mirrored character could
+ // still be barely into the load pose when 'swing' lands moments later -- even though the real batter had already been fully loaded for a while.
+ // That badly-early pose is exactly what kidBatSwingStartFrame then captures as the jump-off point for the hand-tracking-to-procedural-swing
+ // blend (the same handoff mechanism behind the known check-swing artifacts) -- a real "disconnect", not just a late notification. Fixed the
+ // same way 'swing' already is: d.off (set by press(), see its own comment) is this press's own time relative to the BATTER's own tRel; our own
+ // (now-tRel) is the equivalent quantity on OUR side of the same shared timeline (tRel itself already absorbs the cross-client clock/latency
+ // sync -- this is exactly the invariant tsOff already relies on). The difference is how much additional real time has passed, on that shared
+ // timeline, since the real load actually began -- i.e. exactly how far the mirrored animation needs to jump ahead to stop lying about when it
+ // started. Seeded into netLoadSeedTime, consumed once by updateKidBatter()'s own one-time reset (see its own comment) rather than computed here
+ // directly, since the mixer/action aren't touched by this function at all.
+ if(d&&d.off!=null){
+  const elapsed=(now-tRel)-d.off;
+  if(elapsed>0)netLoadSeedTime=Math.min(KIDBAT_LOAD_T,elapsed*(KIDBAT_LOAD_T/C.ST));
+ }
 }
 function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one event in this file that flows DEFENSE -> OFFENSE instead of the
  // usual direction. The opponent's own Hit & Pitch defender just finished picking/aiming/timing their pitch on their screen and is handing us
@@ -3415,7 +3448,7 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  P={t,sp:d.sp,T:d.T,a:new THREE.Vector3(d.a.x,d.a.y,d.a.z),v:new THREE.Vector3(d.v.x,d.v.y,d.v.z),ph:d.ph,tx:d.tx,ty:d.ty,inZ:d.inZ};
  if(d.kx){P.kx=d.kx;P.ky=d.ky;P.dxT=d.dxT;P.dyT=d.dyT}
  const now=performance.now()/1000;
- stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false; // v403b/v405: don't let a
+ stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;netLoadSeedTime=null; // v403b/v405: don't let a
  // stale, never-consumed swing-debug payload (or its incoming-path snapshot) from a previous pitch bleed into this one -- applyNetResultNow()
  // should always consume it first in practice, but this guarantees it the same way trailPts/netPendingSwing already guarantee their own
  // equivalents here. v406: this is ALSO what closes the "still listening for a late arrival" window from the previous pitch (see
