@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v406'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v407'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -3180,8 +3180,29 @@ function iAmBatting(){return onlineActive&&battingTeam===myTeam()}
 function netSnapshot(){return {outs,B,S,pcRed,pcBlue,hitsRed,hitsBlue,scoreRed,scoreBlue,base1,base2,base3,inning,half,battingTeam,rosterSwapped}}
 function applyNetSnapshot(s){
  if(!s)return;
+ const oldBattingTeam=battingTeam; // v407: see the clear block below for why this is captured before the reassignment
  outs=s.outs;B=s.B;S=s.S;pcRed=s.pcRed;pcBlue=s.pcBlue;hitsRed=s.hitsRed;hitsBlue=s.hitsBlue;scoreRed=s.scoreRed;scoreBlue=s.scoreBlue;
  base1=s.base1;base2=s.base2;base3=s.base3;inning=s.inning;half=s.half;battingTeam=s.battingTeam;
+ // v407: a real report -- a 3-inning game in extras, top of the 5th ended on a long fly caught for the 3rd out (LINE OUT), the batter pressed
+ // continue to flip to the bottom of the 5th (now pitching), and as they went to pick a pitch the SAME "LINE OUT" text came back and froze the
+ // whole match -- neither player could do anything. Root cause: every netPendingX stash (netPendingResult/netPendingContact/netPendingAdvance/
+ // netPendingSwing/netPendingLoadStart/netPendingHumanPitch/netPendingSwingDbg, plus netHitIncomingPath/awaitingLateSwingDbg) is scoped to ONE
+ // specific at-bat on the spectator's (defending) side, and is only ever cleared by applyNetPitchStart() -- which only runs again the NEXT time
+ // THIS client is back to being the spectator, potentially a full two half-innings later (their own at-bat sits in between, during which
+ // iAmSpectating is false and nothing ever looks at these at all). If a stash from an old defending stint never fully resolved before that
+ // half-inning ended -- entirely possible; nothing before this fix ever specifically guaranteed it did -- it just sits there, silently, waiting.
+ // The instant this client becomes the spectator again (which is exactly what a half-inning flip, right here, can do), tick()'s own
+ // `if(iAmSpectating&&netPendingResult)` check (and its siblings) starts evaluating that ancient leftover again as if it were live, and can
+ // reapply a result from a play that ended an entire at-bat ago -- resetting st/holdNext back to 'result' out from under the pitch-selection UI
+ // that had already started, which is exactly the frozen, unresponsive state reported (continuePress() requires st==='result' to do anything,
+ // and nothing in pitch-selection expects st to ever BE 'result'). The real battingTeam correction lands right here, every single time (both
+ // the ordinary per-pitch case and every half-inning flip all flow through this same function), so the instant it actually changes is the one
+ // reliable signal that this client's role may have just flipped -- clear every one of these now, the same defensive principle this file
+ // already applies per-pitch (see applyNetPitchStart()'s own clears), just extended to the one boundary that could still outlive them.
+ if(oldBattingTeam!==battingTeam){
+  netPendingContact=null;netPendingResult=null;netPendingAdvance=false;netPendingSwing=null;netPendingLoadStart=false;netPendingHumanPitch=null;
+  netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;
+ }
  if(rosterSwapped!==s.rosterSwapped){rosterSwapped=s.rosterSwapped;applyRosterLooks()}
  // v365: the pitch-pick overlay used to be able to survive a half-inning flip onto the player who was just defending. The race: continuePress()
  // sends 'halfFlip' (the real battingTeam correction) and 'advance' (clears the old result, sets st='wait') as two SEPARATE network writes from
