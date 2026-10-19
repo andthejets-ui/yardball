@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v407'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v408'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1907,6 +1907,22 @@ function release(){
   fanN=0;fanG.setDrawRange(0,0);fill(0);
   return;
  }
+ // v408: "I took a pitch and let go of the button once the ball was way past me and the strike zone target thinking the pitch was over and it
+ // still made me swing late and called it a swing and a miss. The pitch was a ball... maybe it takes longer to complete? We should complete the
+ // ball when it passes the same plane as the strikezone." Root cause (NOT the visual-clamp theory the report guessed at, though that was a real
+ // contributing cue -- see the matching render-clamp fix a few hundred lines down): tryContact()'s own s=(t-ts)/C.SW>1.05 branch, which decides
+ // whether an ALREADY-STARTED swing has run out of time to make contact, is judged purely against how long it's been since release() (ts) -- it
+ // never once looks at where the ball actually is. And endNoContact() (whichever path resolves the pitch -- a normal miss or the no-contact
+ // timeout below) unconditionally trusts `swungFor` to mean "report SWING & MISS", and release() sets swungFor=true the instant it's called, no
+ // matter how late. So a release() called well after the ball has already passed the batter still starts a "real" swing that's doomed to end as
+ // a miss one way or another -- there was never a code path that let a too-late release just become a no-op "take". Fixed at the source, exactly
+ // where the user's own fix suggestion points: once the ball has reached the batter's plane (tau=now-tRel >= P.T -- the same plane the strike
+ // zone is judged against), a brand-new swing can no longer mean anything (a real, well-timed swing always releases well BEFORE tau=P.T to give
+ // the bat time to travel to meet the ball around then, so this can only ever affect a release that's already too late to matter), so release()
+ // quietly does nothing instead of arming a swing that can only resolve as a miss. The pitch then resolves normally a moment later via the
+ // existing no-contact timeout (tau>P.T+0.25) as a genuine BALL or STRIKE (looking), exactly as if the player had just let it go, matching what
+ // they actually did.
+ if(st==='pitch'&&P&&n-tRel>=P.T)return;
  const hold=n-loadStart,prog=Math.min(1,hold/C.ST),land=loadStart+C.ST,sErr=land-tRel;
  // Stride is judged against YOUR release (so it automatically depends on the pitch): e > 0 = the foot was down e seconds before you let go (early), e < 0 = the swing started before the foot landed (late)
  const e=hold-C.ST,late=Math.max(0,-e),early=Math.max(0,e);
@@ -4419,7 +4435,12 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
   }else if((st==='windup'||st==='pitch')&&P&&now-tRel<P.T+0.25){/* not yet -- let it keep flying */}
   else{applyNetResultNow(netPendingResult);netPendingResult=null}
  }
- if(st==='pitch'){const tau=now-tRel;const p=pos(Math.min(tau,P.inZ?P.T:P.T+0.25));ball.position.copy(p);shd.position.set(p.x,0.015,p.z);if(p.z>-4)path.push([p.x,p.z]);
+ if(st==='pitch'){const tau=now-tRel;
+  // v408: the ball used to keep visibly flying 0.25s past P.T for a ball (P.inZ===false) while a strike already froze right at P.T -- a real,
+  // misleading cue that likely fed the user's own "maybe it takes longer to complete" guess on the late-release-still-registers-as-a-miss report
+  // above. Clamped uniformly at P.T now, matching the plane the release() gate (see it above) and the strike zone itself are both judged
+  // against -- a ball's flight visually ends at the same moment a strike's does, not a quarter-second later.
+  const p=pos(Math.min(tau,P.T));ball.position.copy(p);shd.position.set(p.x,0.015,p.z);if(p.z>-4)path.push([p.x,p.z]);
   trailPts.push(p.clone());if(trailPts.length>14)trailPts.shift();setTrail();
   if(tau>P.T+0.25&&!contacted&&!iAmSpectating){ball.position.y=-9;shd.position.y=-9;trailPts.length=0;setTrail();if(loading)loading=false;endNoContact();showDbg();sendSwingDbgIfOnline()}}
   // v326: this was the actual remaining source of the false "miss" -- iAmSpectating was defined (and correctly applied to tryContact() above) but
