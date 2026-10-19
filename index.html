@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v413'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v414'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -968,7 +968,7 @@ function __showDiagAlways(text){ // same look as __showDiag, but ignores __DIAG_
  const wrap=document.createElement('div');wrap.style.cssText='background:#000c;color:#0f0;font:11px monospace;padding:8px;max-width:300px;border-radius:6px';const pre=document.createElement('div');pre.style.cssText='white-space:pre-wrap';pre.textContent=text;wrap.appendChild(pre);__diagContainer().appendChild(wrap);return wrap}
 const __DIAG_ENABLED=false; // gates the one-off/recurring startup+per-pitch __showDiag calls (clip/skin/bone checks, release position check, etc) -- left off so those don't clutter the screen. The live batter phase/action.time readout below has its own always-on element, independent of this flag.
 function __showDiag(text){if(!__DIAG_ENABLED)return null;const wrap=document.createElement('div');wrap.style.cssText='background:#000c;color:#0f0;font:11px monospace;padding:8px;max-width:300px;border-radius:6px';const pre=document.createElement('div');pre.style.cssText='white-space:pre-wrap';pre.textContent=text;const btn=document.createElement('button');btn.textContent='Copy debug';btn.style.cssText='margin-top:6px;font:11px monospace;background:#0f0;color:#000;border:none;border-radius:4px;padding:3px 8px;cursor:pointer';btn.onclick=()=>{navigator.clipboard.writeText(pre.textContent).then(()=>{btn.textContent='Copied!';setTimeout(()=>btn.textContent='Copy debug',1200)}).catch(()=>{btn.textContent='Copy failed';setTimeout(()=>btn.textContent='Copy debug',1200)})};wrap.appendChild(pre);wrap.appendChild(btn);__diagContainer().appendChild(wrap);return wrap}
-let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=false,kidBatPhase=0,kidBatIdleT=0,kidBatDiagFreeze=false,kidBatLiveDiagT=0,kidBatLiveDiagEl=null,kidBatHipBone=null,kidBatHandBoneR=null,kidBatHandBoneL=null,kidBatHoldT=0,kidBatCheckHoldT=0,kidBatSwingStartFrame=37/30,kidBatDynFlatS=0.859,kidBatDynContact=41/30,kidBatLoadActive=false,kidBatCheckActive=false,kidBatCheckJustEnded=false,netLoadSeedTime=null;
+let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=false,kidBatPhase=0,kidBatIdleT=0,kidBatDiagFreeze=false,kidBatLiveDiagT=0,kidBatLiveDiagEl=null,kidBatHipBone=null,kidBatHandBoneR=null,kidBatHandBoneL=null,kidBatHoldT=0,kidBatCheckHoldT=0,kidBatSwingStartFrame=37/30,kidBatDynFlatS=0.859,kidBatDynContact=41/30,kidBatLoadActive=false,kidBatCheckActive=false,kidBatCheckJustEnded=false,netLoadSeedTime=null,kidBatLastActionTime=null,kidBatLastWasLoading=false; // v414: kidBatLastActionTime/kidBatLastWasLoading -- see updateKidBatter()'s own backward-jump detector comment
 // v410: netLoadSeedTime -- see applyNetLoadStart()'s own comment for the full report ("disconnect between the load/stride info and the swing" on
 // the pitcher's mirrored view online). When a 'loadStart' network event arrives carrying a real offset (how far into the pitch-relative timeline
 // the actual batter was when they pressed), this is set to the engine-clip-time the mirrored load animation should jump straight to -- reflecting
@@ -1072,6 +1072,15 @@ function updateKidBatter(dt,sD){
  if(!kidBatReady||!kidBatAction||!kidBatMixer)return; // skip the GLB animation work entirely in Tech Demo mode, not just hide the result -- lets the toggle double as a real performance A/B
  // the always-on "KID BATTER LIVE" readout (phase/action.time/sD/etc) served its purpose for diagnosing the frame-calibration issue and has been
  // removed from normal play. The debug frame scrubber below ([ / ] while paused) still creates/uses kidBatLiveDiagEl on demand if needed again.
+ // v414: catch a backward jump in kidBatAction.time from ANY cause, not just the specific reset paths already instrumented -- every known
+ // trigger (applyNetLoadStart, applyNetPitchStart's stash reveal, applyRosterLooks) has now been ruled out by a real repro that showed zero
+ // anomalies in all of them, so this casts the widest possible net: whatever is actually doing it, this will catch the exact frame it happens.
+ // Scoped to loading===true specifically (both this frame and last) -- the checked-settle ease-down and the swing-hold->idle reset are BOTH
+ // legitimate, already-understood backward moves in kidBatAction.time, and would otherwise drown this out with false positives; a backward
+ // jump during a continuous, uninterrupted load hold is the one case that should never happen and is exactly what a restride would look like.
+ if(loading&&kidBatLastActionTime!==null&&kidBatLastWasLoading&&kidBatAction.time<kidBatLastActionTime-0.001){
+  console.log('[LOADDBG] updateKidBatter: BACKWARD JUMP in kidBatAction.time DURING A LOAD HOLD (unexplained by any known reset path)',JSON.stringify({from:kidBatLastActionTime,to:kidBatAction.time,t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatLoadActive,kidBatCheckActive,st,kidBatIsBatterRig:(typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root),handBoneNull:!kidBatHandBoneL}));
+ }
  if(loading){
   kidBatCheckActive=false;kidBatCheckJustEnded=false;
   if(!kidBatLoadActive){kidBatLoadActive=true;kidBatPhase=1;kidBatAction.reset();kidBatAction.timeScale=KIDBAT_LOAD_T/C.ST;kidBatAction.paused=false;kidBatAction.play()
@@ -1155,6 +1164,7 @@ function updateKidBatter(dt,sD){
   const idleFrame=2+2*Math.sin(kidBatIdleT*1.6); // reverted back to the original frame 0-4 range
   kidBatAction.paused=true;kidBatAction.time=idleFrame/30;kidBatMixer.update(0);
  }
+ kidBatLastActionTime=kidBatAction.time;kidBatLastWasLoading=loading; // v414: recorded every frame, after everything above has had its chance to set this frame's time -- read back at the TOP of the next call to catch any backward jump, from whatever actually causes it
 }
 const bgeo2=new THREE.CylinderGeometry(1,1,1,8),bbm=BONB.map(b=>{const m=new THREE.Mesh(bgeo2,M([0x9aa0a6,0xe0b090,0x2f5d3a][b[3]]));sc.add(m);outline(m,1.35,1.01);return m});
 const bhead=add(new THREE.SphereGeometry(.15,12,12),M(0xe0b090),0,0,0);outline(bhead,1.12,1.12);
