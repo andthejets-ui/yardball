@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v411'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v412'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1075,7 +1075,7 @@ function updateKidBatter(dt,sD){
  if(loading){
   kidBatCheckActive=false;kidBatCheckJustEnded=false;
   if(!kidBatLoadActive){kidBatLoadActive=true;kidBatPhase=1;kidBatAction.reset();kidBatAction.timeScale=KIDBAT_LOAD_T/C.ST;kidBatAction.paused=false;kidBatAction.play()
-   console.log('[LOADDBG] updateKidBatter: one-time load-reset fired',{t:performance.now()/1000,seedPending:netLoadSeedTime,kidBatIsBatterRig:(typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root),handBoneNull:!kidBatHandBoneL});
+   console.log('[LOADDBG] updateKidBatter: one-time load-reset fired',JSON.stringify({t:performance.now()/1000,seedPending:netLoadSeedTime,kidBatIsBatterRig:(typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root),handBoneNull:!kidBatHandBoneL}));
    if(netLoadSeedTime!==null){kidBatAction.time=netLoadSeedTime;netLoadSeedTime=null}} // v410: a network-mirrored load with a known real offset jumps straight to where the real load actually is right now, instead of always starting this ramp from frame 0 -- see netLoadSeedTime's own declaration comment
    // single consistent pace through the whole load, no separate slow creep -- the stride-timing mechanic already judges on-time vs early, so this doesn't need its own drift. Guarded by kidBatLoadActive, not kidBatPhase, so a load starting right after a check swing (which also leaves kidBatPhase===1) still gets its proper reset/play instead of inheriting the check-swing's frozen/interpolating clip time
   kidBatMixer.update(dt);
@@ -3304,13 +3304,13 @@ function applyNetLoadStart(d){ // spectator only -- v365: mirrors press()'s own 
   // there was no load phase to blend out of, reading as a "disconnect"/rushed snap straight into the swing. Stash it instead, and consume it the
   // moment OUR OWN windup actually begins (see applyNetPitchStart()'s own check) so the spectator starts this pitch already in the loaded stance,
   // matching reality.
-  console.log('[LOADDBG] applyNetLoadStart: STASHED (our st='+st+' not windup/pitch yet)',{off:d&&d.off,t:performance.now()/1000});
+  console.log('[LOADDBG] applyNetLoadStart: STASHED (our st='+st+' not windup/pitch yet)',JSON.stringify({off:d&&d.off,t:performance.now()/1000}));
   netPendingLoadStart=true;return;
  }
- if(loading||swinging){console.log('[LOADDBG] applyNetLoadStart: DROPPED (loading='+loading+' swinging='+swinging+')',{off:d&&d.off,t:performance.now()/1000});return} // already loading (a duplicate or late-arriving echo) or already mid-swing (a 'swing' event beat this one here,
+ if(loading||swinging){console.log('[LOADDBG] applyNetLoadStart: DROPPED (loading='+loading+' swinging='+swinging+')',JSON.stringify({off:d&&d.off,t:performance.now()/1000}));return} // already loading (a duplicate or late-arriving echo) or already mid-swing (a 'swing' event beat this one here,
  // e.g. reordered on a lossy connection) -- don't stomp a more-current state with a stale one
  const now=performance.now()/1000;
- console.log('[LOADDBG] applyNetLoadStart: APPLIED (direct path)',{off:d&&d.off,st,t:now,tRel,kidBatLoadActive,kidBatPhase});
+ console.log('[LOADDBG] applyNetLoadStart: APPLIED (direct path)',JSON.stringify({off:d&&d.off,st,t:now,tRel,kidBatLoadActive,kidBatPhase}));
  loading=true;loadStart=now;
  // v410: "it feels like a disconnect between the load/stride info and the swing... maybe that disconnect leads to the bat not being seen where
  // it should be" -- a real report of an animation-blend artifact (same family as the known offline check-swing issue) specifically on the
@@ -3330,7 +3330,7 @@ function applyNetLoadStart(d){ // spectator only -- v365: mirrors press()'s own 
  if(d&&d.off!=null){
   const elapsed=(now-tRel)-d.off;
   if(elapsed>0)netLoadSeedTime=Math.min(KIDBAT_LOAD_T,elapsed*(KIDBAT_LOAD_T/C.ST));
-  console.log('[LOADDBG] applyNetLoadStart: seed computed',{elapsed,seed:netLoadSeedTime});
+  console.log('[LOADDBG] applyNetLoadStart: seed computed',JSON.stringify({elapsed,seed:netLoadSeedTime}));
  }
 }
 function applyNetHumanPitchChosen(d){ // v356/v364: batting side only -- the one event in this file that flows DEFENSE -> OFFENSE instead of the
@@ -3498,7 +3498,7 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  // v392: our own windup is starting RIGHT NOW -- if the batter already told us (via applyNetLoadStart()'s own stash) that they started loading
  // before this moment even arrived, begin this pitch already in the loaded stance instead of idle, exactly matching what actually happened on
  // their screen. See applyNetLoadStart()'s own comment for the full report this fixes.
- if(netPendingLoadStart){console.log('[LOADDBG] applyNetPitchStart: consuming stashed loadStart',{t:now,kidBatLoadActive,kidBatPhase});netPendingLoadStart=false;loading=true;loadStart=now}
+ if(netPendingLoadStart){console.log('[LOADDBG] applyNetPitchStart: consuming stashed loadStart',JSON.stringify({t:now,kidBatLoadActive,kidBatPhase}));netPendingLoadStart=false;loading=true;loadStart=now}
  // v400: same idea, one step further along -- if a 'swing' for THIS pitch already arrived and got stashed (see applyNetSwing()'s own comment)
  // before we'd even reached 'windup' yet, replay it right now. st is already 'windup' at this point, so applyNetSwing()'s own gate lets it
  // through normally -- this just makes sure it isn't the LAST thing to ever ask "has windup started yet" and get a stale "no".
@@ -3523,9 +3523,9 @@ function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's sw
  // already on 'hit' or 'result' for this same old pitch, i.e. we've moved PAST windup/pitch without it, so applying it now would stomp onto
  // whatever pitch comes next instead. Telling them apart the same way applyNetAdvance() already does for its own mirror-image case: early means
  // we haven't reached the target state yet (behind), stale means we're already past it (ahead).
- if(st==='wait'||st==='pitchPick'||st==='pitchAim'){console.log('[LOADDBG] applyNetSwing: STASHED (st='+st+')',{tsOff:d&&d.tsOff,t:performance.now()/1000});netPendingSwing=d;return}
- if(st!=='windup'&&st!=='pitch'){console.log('[LOADDBG] applyNetSwing: DROPPED stale (st='+st+')',{tsOff:d&&d.tsOff,t:performance.now()/1000});return} // already past this same old pitch (hit/result) -- genuinely stale, not early; drop it rather than stomp the next one
- console.log('[LOADDBG] applyNetSwing: APPLIED',{tsOff:d&&d.tsOff,st,t:performance.now()/1000,tRel,kidBatLoadActive,kidBatPhase,netLoadSeedTime});
+ if(st==='wait'||st==='pitchPick'||st==='pitchAim'){console.log('[LOADDBG] applyNetSwing: STASHED (st='+st+')',JSON.stringify({tsOff:d&&d.tsOff,t:performance.now()/1000}));netPendingSwing=d;return}
+ if(st!=='windup'&&st!=='pitch'){console.log('[LOADDBG] applyNetSwing: DROPPED stale (st='+st+')',JSON.stringify({tsOff:d&&d.tsOff,t:performance.now()/1000}));return} // already past this same old pitch (hit/result) -- genuinely stale, not early; drop it rather than stomp the next one
+ console.log('[LOADDBG] applyNetSwing: APPLIED',JSON.stringify({tsOff:d&&d.tsOff,st,t:performance.now()/1000,tRel,kidBatLoadActive,kidBatPhase,netLoadSeedTime}));
  // v334: mirror this swing's real swp (see the netSend('swing',...) call's own comment for why) -- same two lines release()/press() themselves
  // run right after building it (HC.y/HC.x feed the hand-position interpolation the bat follows through the whole swing).
  if(d.swp){swp={hy:d.swp.hy,hx:d.swp.hx,xx:d.swp.xx,elc:d.swp.elc,L:d.swp.L,aC:d.swp.aC,aDip:d.swp.aDip,adjT:d.swp.adjT,sC:d.swp.sC,dipRelief:d.swp.dipRelief};HC.y=swp.hy;HC.x=C.PX+swp.hx}
@@ -3536,8 +3536,8 @@ function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's sw
 function applyNetCheckSwing(){ // spectator only -- v348: mirrors press()'s own check-swing branch exactly (see its comment for why uC=1 specifically),
  // so the spectator's bat aborts out of the swing into the same clean return-to-load pose the real batter's own screen shows, instead of playing
  // out the full swing it was sent a moment ago by applyNetSwing() before the batter had actually decided to check it.
- if(!swinging){console.log('[LOADDBG] applyNetCheckSwing: BLOCKED (swinging=false)',{t:performance.now()/1000,st});return} // stale/out-of-order (e.g. contact or the next pitch's own events already landed) -- nothing left to abort
- console.log('[LOADDBG] applyNetCheckSwing: APPLIED',{t:performance.now()/1000,st,kidBatLoadActive,kidBatPhase});
+ if(!swinging){console.log('[LOADDBG] applyNetCheckSwing: BLOCKED (swinging=false)',JSON.stringify({t:performance.now()/1000,st}));return} // stale/out-of-order (e.g. contact or the next pitch's own events already landed) -- nothing left to abort
+ console.log('[LOADDBG] applyNetCheckSwing: APPLIED',JSON.stringify({t:performance.now()/1000,st,kidBatLoadActive,kidBatPhase}));
  swinging=false;checked=true;loading=false;swungFor=false;$('dbg').dataset.chk=1;note('CHECK SWING');uC=1;
 }
 function applyNetContact(d){ // spectator only -- v329/v330: the batting side sends this the instant real contact happens, carrying d.tau (the
@@ -4390,9 +4390,9 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  { // hand-following during load and follow-through (both looked good visually), procedural physics-accurate arc only for the approach-to-contact window (load-end through the flat/contact-aligned point), where "can hit anywhere along the swing plane" needs to be preserved
   // simplified: no more multi-frame slerp blend (recomputing a moving target quaternion every frame and slerping toward it was unstable -- the shortest-path choice could effectively flip between frames, causing the shaking/jumping). Instead: keep hand-following for the first few animation frames of the swing (roughly frame 30->31.7), then one single, direct switch to the procedural arc with no blend at all.
   const __useHand=kidBatReady&&kidBat&&(kidBatPhase===0||kidBatPhase===1||(kidBatPhase===2&&kidBatAction.time>=kidBatDynContact));
-  if(__useHand!==kidBatWasHand)console.log('[LOADDBG] __useHand transition',{from:kidBatWasHand,to:__useHand,t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatActionTime:kidBatAction&&kidBatAction.time});
+  if(__useHand!==kidBatWasHand)console.log('[LOADDBG] __useHand transition',JSON.stringify({from:kidBatWasHand,to:__useHand,t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatActionTime:kidBatAction&&kidBatAction.time}));
   if(__useHand){
-   if(!kidBatHandBoneL){console.log('[LOADDBG] __useHand: re-resolving kidBatHandBoneL (was null)',{t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatIsBatterRig:(typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root),kidBatIsPitcherRig:(typeof kidPitcherRig!=='undefined'&&!!kidPitcherRig&&kidBat===kidPitcherRig.root)});kidBatHandBoneL=kidBat.getObjectByName('mixamorigLeftHand');console.log('[LOADDBG] __useHand: re-resolve result',{found:!!kidBatHandBoneL});}
+   if(!kidBatHandBoneL){console.log('[LOADDBG] __useHand: re-resolving kidBatHandBoneL (was null)',JSON.stringify({t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatIsBatterRig:(typeof kidBatRig!=='undefined'&&!!kidBatRig&&kidBat===kidBatRig.root),kidBatIsPitcherRig:(typeof kidPitcherRig!=='undefined'&&!!kidPitcherRig&&kidBat===kidPitcherRig.root)}));kidBatHandBoneL=kidBat.getObjectByName('mixamorigLeftHand');console.log('[LOADDBG] __useHand: re-resolve result',JSON.stringify({found:!!kidBatHandBoneL}));}
    if(kidBatHandBoneL){
     if(!kidBatWasHand||kidBatForceSnap){ // just switched this frame (or a forced resnap was requested, e.g. checked->idle, where __useHand stays true the whole time so this never flips on its own) -- snapshot wherever the bat currently is, for a brief blend
      kidBatSnapPos.copy(batG.position);kidBatSnapQuat.copy(batG.quaternion);kidBatSnapT=0;kidBatForceSnap=false;
