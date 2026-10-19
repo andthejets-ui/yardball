@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v412'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v413'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1000,7 +1000,7 @@ let kidBatSnapT2=1,kidBatSnapPos2=new THREE.Vector3(),kidBatSnapQuat2=new THREE.
     kidBatMixer=new THREE.AnimationMixer(root);kidBatAction=kidBatMixer.clipAction(clip);
     kidBatAction.clampWhenFinished=true;kidBatAction.enabled=true;kidBatAction.setEffectiveWeight(1);kidBatAction.play();kidBatAction.paused=true;
     kidBatAction.time=0;kidBatMixer.update(0); // force the skeleton into a valid resolved pose immediately -- otherwise it sits unposed until the player's first load/swing, which can leave a skinned mesh invisible -- moved up here, before the diagnostics below, so they can actually reference a real action/mixer instead of null
-    kidBatRig={root:root,mixer:kidBatMixer,ownAction:kidBatAction,ownClip:clip,ownClipDur:kidBatClipDur};applyRosterLooks(); // v289: permanent ref to this physical rig for the roster swap (see its own big comment above) -- applyRosterLooks() re-syncs in case the pitcher's GLB already finished loading first
+    kidBatRig={root:root,mixer:kidBatMixer,ownAction:kidBatAction,ownClip:clip,ownClipDur:kidBatClipDur};applyRosterLooks('batterGLBLoaded'); // v289: permanent ref to this physical rig for the roster swap (see its own big comment above) -- applyRosterLooks() re-syncs in case the pitcher's GLB already finished loading first
     console.log('kid batter: clip tracks=',clip.tracks.length,'duration=',kidBatClipDur);
     __showDiag('KID BATTER CLIP\nname: '+clip.name+'\ntracks: '+clip.tracks.length+'\nduration: '+kidBatClipDur.toFixed(3)+'s\nfirst track: '+(clip.tracks[0]?clip.tracks[0].name:'none'));
     const __boneNames=[];root.traverse(o=>{if(o.isBone&&__boneNames.length<5)__boneNames.push(o.name)});
@@ -1238,8 +1238,9 @@ const KIDBAT_HOME={pos:new THREE.Vector3(-1.10,0.05,0.12),rotY:Math.PI,scale:0.0
 // scale is part of the SLOT, not the rig -- the pitcher's 0.01944 vs the batter's 0.018 (~8% bigger) was tuned because he's farther from camera at
 // the mound, not because that particular character model is bigger. Without this, a swapped rig kept its own native scale and looked wrong-sized for
 // its new spot (too small at the mound, slightly too big at the plate).
-function applyRosterLooks(){
+function applyRosterLooks(reason){
  if(!kidBatRig||!kidPitcherRig)return; // not both loaded yet -- startup order isn't guaranteed, this just no-ops until it is
+ console.log('[LOADDBG] applyRosterLooks: FIRING (resets kidBatAction.time to 0 and nulls kidBatHandBoneL)',JSON.stringify({reason:reason||'unknown',t:performance.now()/1000,st,loading,swinging,checked,rosterSwapped}));
  try{
   // stop every action on both mixers first, so only the one we're about to activate per mixer has any weight (a mixer can have more than one
   // clipAction ever created on it across swaps -- an un-stopped old one keeps blending in at full weight alongside whatever plays next)
@@ -1291,7 +1292,7 @@ root.traverse(o=>{if(o.isMesh){o.material=new THREE.MeshLambertMaterial({map:__k
     kidMixer=new THREE.AnimationMixer(root);kidAction=kidMixer.clipAction(clip);
     kidAction.clampWhenFinished=true;kidAction.enabled=true;kidAction.setEffectiveWeight(1);kidAction.play();kidAction.paused=true;
     kidAction.time=0;kidMixer.update(0); // force a resolved pose immediately, mixer/action set up before any diagnostics reference it (sequencing bug from the batter work, avoided this time)
-    kidPitcherRig={root:root,mixer:kidMixer,ownAction:kidAction,ownClip:clip,ownClipDur:kidClipDur};applyRosterLooks(); // v289: permanent ref to this physical rig for the roster swap (see its own big comment above) -- applyRosterLooks() re-syncs in case the batter's GLB already finished loading first
+    kidPitcherRig={root:root,mixer:kidMixer,ownAction:kidAction,ownClip:clip,ownClipDur:kidClipDur};applyRosterLooks('pitcherGLBLoaded'); // v289: permanent ref to this physical rig for the roster swap (see its own big comment above) -- applyRosterLooks() re-syncs in case the batter's GLB already finished loading first
     console.log('kid pitcher: clip tracks=',clip.tracks.length,'duration=',kidClipDur);
    } else console.warn('kid pitcher: NO animations found in this GLB');
    const __box=new THREE.Box3().setFromObject(root);const __sz=__box.getSize(new THREE.Vector3()),__ct=__box.getCenter(new THREE.Vector3());
@@ -1795,7 +1796,7 @@ function continuePress(src){ // the dedicated "advance past a result" input (B /
  if(walkoffPending){walkoffPending=false;endGame(inning,wasOnlineBatter);return}
  if(outs>=3){
   const completingBottom=half==='bottom'; // captured before the flip below -- true means this 3rd out just finished a full inning (both halves)
-  outs=0;clearBases();half=half==='top'?'bottom':'top';if(half==='top')inning++;battingTeam=half==='top'?'red':'blue';rosterSwapped=battingTeam==='blue';applyRosterLooks();updSB();
+  outs=0;clearBases();half=half==='top'?'bottom':'top';if(half==='top')inning++;battingTeam=half==='top'?'red':'blue';rosterSwapped=battingTeam==='blue';applyRosterLooks('halfInningFlip');updSB();
   // v319: authority for a pitch follows whoever is CURRENTLY BATTING (see the v317 comment above), which this line just reassigned -- so the instant
   // after this runs, the side that was just batting is no longer the one responsible for throwing the next pitch, and the side that's newly up has
   // no way to know that yet (it only ever updates its own local battingTeam by RECEIVING a network event, and nobody had sent one for this). Both
@@ -3233,7 +3234,7 @@ function applyNetSnapshot(s){
   netPendingContact=null;netPendingResult=null;netPendingAdvance=false;netPendingSwing=null;netPendingLoadStart=false;netPendingHumanPitch=null;
   netPendingSwingDbg=null;netHitIncomingPath=null;awaitingLateSwingDbg=false;netLoadSeedTime=null;
  }
- if(rosterSwapped!==s.rosterSwapped){rosterSwapped=s.rosterSwapped;applyRosterLooks()}
+ if(rosterSwapped!==s.rosterSwapped){rosterSwapped=s.rosterSwapped;applyRosterLooks('netSnapshotMismatch')}
  // v365: the pitch-pick overlay used to be able to survive a half-inning flip onto the player who was just defending. The race: continuePress()
  // sends 'halfFlip' (the real battingTeam correction) and 'advance' (clears the old result, sets st='wait') as two SEPARATE network writes from
  // the same call -- if 'advance' happens to be observed first, tick()'s own auto-start block sees st==='wait' with the STILL-STALE (pre-flip)
