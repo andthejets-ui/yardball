@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v415'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v416'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4391,7 +4391,7 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
  if(swinging&&now>ts+C.SW+0.45)swinging=false;
  if(checked&&loading)checked=false; // clear once a NEW load actually starts -- this used to clear on !loading, which was true on the very next frame after a check (loading was already set false by the check itself), so `checked` never actually lived long enough for updateKidBatter() to see it
  const hold=loading?Math.min(1,(now-loadStart)/C.ST):0;if(loading){fill(hold);$('fill').style.background=hold>=1?'#5fd36a':'#ffd23f'}
- let sD=swinging?Math.min(1.5,(now-ts)/C.SW):0;
+ let sD=swinging?Math.max(0,Math.min(1.5,(now-ts)/C.SW)):0; // v416: floored at 0 -- a MIRRORED swing's ts is reconstructed as tRel+d.tsOff against the receiving client's own tRel, which doesn't perfectly agree with the sending client's clock; when that reconstruction lands ts slightly in the FUTURE relative to "now" on this machine, sD goes briefly negative on the very first rendered frame(s) of swinging. Un-floored, that negative sD fed straight into updateKidBatter's catch-up blend (t=kidBatSwingStartFrame+(KIDBAT_SWING_START-kidBatSwingStartFrame)*(sD/__catchupS)) extrapolates BACKWARD past kidBatSwingStartFrame -- driving the clip time back down into the load/stride pose range -- before sD climbs back through 0 and the animation snaps back up into the real swing. That's the full restride the pitcher/spectator side was seeing: never on the batter's own screen because a local press sets ts directly with zero network reconstruction, so now-ts is never negative there.
  if(frozenT&&now>=frozenT){frozenT=0;mk.position.y=-9} // marker only; the player keeps swinging
  let hp;
  if(swinging){uC=1+sD;visA=aOf(sD);visEl=elOfA(visA);hp=HAt(sD);dispA=visA}
