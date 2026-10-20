@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v418'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v419'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -978,7 +978,7 @@ let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=f
 // that has a real cross-client offset to seed from. // kidBatLoadActive tracks whether THIS load has already done its one-time reset/play -- separate from kidBatPhase because checked also leaves kidBatPhase at 1, so reusing `kidBatPhase!==1` as the loading branch's "just started" guard meant a new load begun right after a check swing was wrongly treated as already-in-progress and silently skipped its reset, leaving the clip frozen wherever the check-swing hold/ease had last left it instead of properly restarting the load animation. kidBatCheckActive is the equivalent one-time-init guard for the checked branch's own hold timer. kidBatCheckJustEnded flags the one frame where checked's hold naturally expired, so the idle branch's first frame (and ONLY that frame -- it clears itself immediately) can request the hand-bone blend via kidBatForceSnap; setting kidBatForceSnap directly at expiry doesn't work because that expiry frame still renders the checked pose itself (same source and target), consuming the flag a frame too early
 const KIDBAT_BAT_CORRECTION=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),Math.PI);
 const KIDBAT_HAND_OFFSET=new THREE.Vector3(0,2,0); // reduced from 5 -- the gap in screenshots suggests the offset was too large, pulling the grip point too far from where his hand actually is
-let kidBatWasHand=false,kidBatSnapT=1,kidBatSnapPos=new THREE.Vector3(),kidBatSnapQuat=new THREE.Quaternion(),kidBatHandQ=new THREE.Quaternion(),kidBatHandoffYaw=null,kidBatHandoffPos=null,kidBatHandoffPosT=1,kidBatForceSnap=false; // kidBatHandoffPos/kidBatHandoffPosT: v418, same idea as kidBatHandoffYaw but for position -- see its own blend site below. Unlike the yaw blend (gated on sD, the swing's own progress value), this is gated on a real-time dt timer like kidBatSnapT, specifically so it still eases smoothly even when a MIRRORED swing's sD is already meaningfully past 0 on the very first frame it's ever rendered (network delivery took real time before this client ever saw it) -- an sD-gated blend window can already be closed before frame one, a dt-gated one can't. // kidBatForceSnap lets code elsewhere (the checked->idle handoff) request the snapshot-blend even when __useHand stays continuously true across the transition (so kidBatWasHand itself never flips false->true) -- kidBatWasHand gets reset to true every __useHand frame regardless, so it can't carry a cross-frame "please resnap" request on its own
+let kidBatWasHand=false,kidBatSnapT=1,kidBatSnapPos=new THREE.Vector3(),kidBatSnapQuat=new THREE.Quaternion(),kidBatHandQ=new THREE.Quaternion(),kidBatHandoffYaw=null,kidBatHandoffPos=null,kidBatHandoffPosT=1,kidBatHandoffArmed=true,kidBatForceSnap=false; // kidBatHandoffPos/kidBatHandoffPosT: v418, same idea as kidBatHandoffYaw but for position -- see its own blend site below. Unlike the yaw blend (gated on sD, the swing's own progress value), this is gated on a real-time dt timer like kidBatSnapT, specifically so it still eases smoothly even when a MIRRORED swing's sD is already meaningfully past 0 on the very first frame it's ever rendered (network delivery took real time before this client ever saw it) -- an sD-gated blend window can already be closed before frame one, a dt-gated one can't. kidBatHandoffArmed: v419 -- false while frozen at the just-measured handoff pose (the body's own catch-up window hasn't ended yet), true once the blend has actually started; starts true so nothing is frozen before the first swing ever happens. // kidBatForceSnap lets code elsewhere (the checked->idle handoff) request the snapshot-blend even when __useHand stays continuously true across the transition (so kidBatWasHand itself never flips false->true) -- kidBatWasHand gets reset to true every __useHand frame regardless, so it can't carry a cross-frame "please resnap" request on its own
 const KIDBAT_YAW_BLEND_S=0.1; // render-only window (in sD) over which the real bat's visible yaw eases from the measured hand-bone angle at load-end into the true visA sweep, instead of popping straight to A_REST
 let kidBatSnapT2=1,kidBatSnapPos2=new THREE.Vector3(),kidBatSnapQuat2=new THREE.Quaternion();
 (function loadKidBatter(){
@@ -4449,33 +4449,50 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
    // it); a MIRRORED swing's sD can already be meaningfully >0 the very FIRST frame it's ever rendered, since real time elapses between
    // when the swing actually started (per the reconstructed ts) and when this client finally receives and applies that network event --
    // so hp can already be partway through its own arc on frame one, while the skeleton (still mid-transition) still visually reads as the
-   // load pose -- exactly "he holds this load... hasn't actually started swinging yet" while the bat's already jumped. yaw already got a
-   // blend-in treatment (below) but gated it on sD, which has the same blind spot: if sD is already past the blend window on frame one,
-   // that blend never engages either. v418: ease POSITION in from the hand bone's own last measured point, gated on a real dt timer
-   // (kidBatHandoffPosT, same pattern as kidBatSnapT above) instead of sD, so it always gets its full window regardless of how far sD had
-   // already advanced before this client's first chance to render it. Purely cosmetic: hp/visA/contact physics/fan-trail recording are
-   // completely unaffected, so this doesn't touch reach or timing at all, just how the bat visually gets there.
-   if(kidBatWasHand){ // just left hand-tracking this frame -- measure the hand bone's actual yaw AND position so the blends below start exactly there
+   // load pose -- exactly "he holds this load... hasn't actually started swinging yet" while the bat's already jumped.
+   // v418 first blended the bat in immediately on the handoff frame, which was an improvement but still visibly drifted the bat while the
+   // BODY itself was still sitting in its own catch-up window (updateKidBatter()'s swing branch gives the skeleton the same kind of grace
+   // period, easing kidBatAction.time from wherever load left off toward KIDBAT_SWING_START over sD<=__catchupS before it visibly starts
+   // swinging) -- so the bat would start moving toward hp before the body had visibly moved at all. User's own framing: "he stays in that
+   // fixed pose until he starts swinging and we shouldn't update the bat from its expected spot for that frame at all... do the blend as it
+   // goes into the position it wants in the first frame of the swing animation instead." v419: hold the bat PERFECTLY frozen at the measured
+   // handoff point through that same catch-up window (recomputed identically to updateKidBatter()'s own __catchupS, from the same
+   // already-global kidBatDynFlatS, so both stay in lockstep with whatever the skeleton is actually doing this swing) -- no position update
+   // at all during that window, not even a blend toward it. Only once sD first crosses that threshold (the body's own first real moment of
+   // visible swing motion) does the position blend actually start, from that same captured point toward hp, over the usual ~0.08s realtime
+   // window. yaw gets the identical treatment now too, sharing the same start-gate, so rotation and position stay in sync rather than one
+   // drifting while the other holds. Purely cosmetic: hp/visA/contact physics/fan-trail recording are completely unaffected, so reach and
+   // swing timing are untouched either way.
+   if(kidBatWasHand){ // just left hand-tracking this frame -- measure the hand bone's actual yaw AND position, and re-arm the gate below
     const __eu=new THREE.Euler().setFromQuaternion(kidBatHandQ,'YXZ');
     kidBatHandoffYaw=Math.PI/2-__eu.y;
     if(!kidBatHandoffPos)kidBatHandoffPos=new THREE.Vector3();
     kidBatHandoffPos.copy(batG.position); // last frame's hand-tracked position, before it gets overwritten by hp just below
-    kidBatHandoffPosT=0;
+    kidBatHandoffPosT=0;kidBatHandoffArmed=false; // armed=false: frozen, waiting for the body's own catch-up window to actually end
    }
-   batG.position.copy(hp);
-   if(kidBatHandoffPosT<0.08){ // fixed ~0.08s real-time window, same length as kidBatSnapT's blend above, deliberately NOT gated on sD (see comment above)
-    const __bw2=1-kidBatHandoffPosT/0.08;
-    batG.position.lerp(kidBatHandoffPos,__bw2);
-    kidBatHandoffPosT+=dt;
-   }
-   // explicit x/y/z (not just .y=) -- batG.quaternion was driven directly by the hand bone a moment ago and can carry non-zero x/z
-   // Euler components; setting only .y leaves those stale components mixed in, which can roll the bat edge-on to the camera (looks
-   // like the bat vanishes). This clears it back to a clean yaw-only rotation every time, matching the ghost bat's own convention.
-   if(kidBatHandoffYaw!==null&&sD<KIDBAT_YAW_BLEND_S){
-    const __bp=sD/KIDBAT_YAW_BLEND_S,__be=1-(1-__bp)*(1-__bp); // ease-out, always moving from the measured angle toward visA -- never the other way
-    batG.rotation.set(0,Math.PI/2-(kidBatHandoffYaw+(visA-kidBatHandoffYaw)*__be),0);
+   const __catchupSEq=Math.min(kidBatDynFlatS*0.15,0.06); // same formula as updateKidBatter()'s own __catchupS, kept in lockstep via the shared kidBatDynFlatS
+   if(kidBatHandoffPos!==null&&!kidBatHandoffArmed&&sD<=__catchupSEq){
+    // frozen: the body itself hasn't visibly started swinging yet (still inside its own catch-up window), so neither the bat's position
+    // nor its yaw move from the measured handoff pose yet
+    batG.position.copy(kidBatHandoffPos);
+    if(kidBatHandoffYaw!==null)batG.rotation.set(0,Math.PI/2-kidBatHandoffYaw,0);
    }else{
-    batG.rotation.set(0,Math.PI/2-visA,0);
+    if(kidBatHandoffPos!==null&&!kidBatHandoffArmed){kidBatHandoffArmed=true;kidBatHandoffPosT=0} // just crossed out of the catch-up window -- start both the position and yaw blends fresh, from the same captured point/angle
+    batG.position.copy(hp);
+    if(kidBatHandoffPosT<0.08){ // fixed ~0.08s real-time window, same length as kidBatSnapT's blend above, deliberately NOT gated on sD (see comment above)
+     const __bw2=1-kidBatHandoffPosT/0.08;
+     batG.position.lerp(kidBatHandoffPos,__bw2);
+     kidBatHandoffPosT+=dt;
+    }
+    // explicit x/y/z (not just .y=) -- batG.quaternion was driven directly by the hand bone a moment ago and can carry non-zero x/z
+    // Euler components; setting only .y leaves those stale components mixed in, which can roll the bat edge-on to the camera (looks
+    // like the bat vanishes). This clears it back to a clean yaw-only rotation every time, matching the ghost bat's own convention.
+    if(kidBatHandoffYaw!==null&&sD<KIDBAT_YAW_BLEND_S){
+     const __bp=sD/KIDBAT_YAW_BLEND_S,__be=1-(1-__bp)*(1-__bp); // ease-out, always moving from the measured angle toward visA -- never the other way
+     batG.rotation.set(0,Math.PI/2-(kidBatHandoffYaw+(visA-kidBatHandoffYaw)*__be),0);
+    }else{
+     batG.rotation.set(0,Math.PI/2-visA,0);
+    }
    }
    batT.rotation.z=visEl;
    kidBatWasHand=false;
