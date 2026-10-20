@@ -328,12 +328,14 @@ exactly the "floats up to the top-left" bug. */
  <div class="pmrow"><span>Pitcher Type</span><button id="gs-pitcher"></button></div>
  <div class="pmrow"><span>Pitch Location</span><button id="gs-loc"></button></div>
  <div class="pmrow"><span>Innings</span><button id="gs-innings"></button></div>
+ <div class="pmrow"><span>Baserunning</span><button id="gs-baserunning"></button></div>
  <button id="gsDone">Done</button>
 </div></div>
 <div id="pm"><div id="pmbox"><h2>Paused</h2>
  <div class="pmrow"><span>Pitcher Type</span><button id="pm-pitcher"></button></div>
  <div class="pmrow"><span>Pitch Location</span><button id="pm-loc"></button></div>
  <div class="pmrow"><span>Innings</span><button id="pm-innings"></button></div>
+ <div class="pmrow"><span>Baserunning</span><button id="pm-baserunning"></button></div>
  <div class="pmrow"><span>Camera</span><button id="pm-cam"></button></div>
  <div class="pmrow"><span>Ambience</span><button id="pm-amb"></button></div>
  <div class="pmrow"><span>Last Pitch Data</span><button id="pm-lastpitch"></button></div>
@@ -475,7 +477,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v425'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v426'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -620,6 +622,80 @@ function advanceRunners(n){ // n = bases the batter reaches: 1 single, 2 double,
  bankRuns(runs)}
 function advanceWalk(){const r1=base1,r2=base2,r3=base3;let runs=0;if(r1){if(r2){if(r3)runs=1;base3=true}base2=true}base1=true;bankRuns(runs)}
 function updBases(){$('b1').classList.toggle('on',base1);$('b2').classList.toggle('on',base2);$('b3').classList.toggle('on',base3)}
+// v426: "Advanced" baserunning on batted-ball OUTS. Basic (the ~15 lines above, unchanged) is what the game always did until now: any
+// out holds every runner exactly where they were, no tag-ups, no force reads, no double plays. That was always a known placeholder
+// (see base1/base2/base3's own declaration comment). Advanced applies general-bucket rules -- ball type, which fielder/side fielded
+// it, hard vs soft contact -- the same spirit as the rest of this file's hit-result model: meets ordinary baseball expectations for
+// the common case, never a real simulated relay throw or tag race. Toggle lives in Game Settings/pause menu, defaults to Advanced,
+// synced for online matches (see syncSettings()) so both clients always resolve a play identically.
+let advBase=1;const ADV_BASE_MODES=['Basic','Advanced'];
+// 'adv' = 1B/2B side (defense concedes the extra base rather than risk the longer throw), 'hold' = P/SS side (defense checks the
+// runner), '3B' = specifically the 3B-hole fork used only by the 1st+2nd case below (force the lead runner at 3rd instead of turning
+// the conventional double play -- a 3B/SS-hole play is too far from 2nd to get there in time). holeTowardThird: for an SS play only,
+// whether he fielded it on the 3B side of his own station (fd.hx<fd.f.x) -- reuses the same hx/f.x the 3B-hole fielding note already
+// computes, see fieldNote()'s own hole% comment.
+function advSide(fName,holeTowardThird){
+ if(fName==='1B'||fName==='2B')return'adv';
+ if(fName==='3B')return'3B';
+ if(fName==='SS')return holeTowardThird?'3B':'hold';
+ return'hold'; // P, or no specific fielder credited (the caller already folds a weak dribbler's side into a synthetic 1B/SS/P name from where it died)
+}
+function resolveAdvancedBaserunning(k,outsBefore,fName,holeTowardThird,hard){
+ // k: 'ground ball'|'fly ball'|'line drive'. outsBefore: outs BEFORE this play (the batter's own out is already counted by the
+ // caller -- this only ever adds an EXTRA out, a double play's second one). fName: the fielder credited with the play, or null.
+ // hard: H.ev>=FP.vSoft, same threshold the rest of the hit model already uses to mean "not weakly hit." Mutates base1/2/3 and
+ // calls bankRuns() directly, same convention advanceRunners()/advanceWalk() already use. Returns {outs,runs,note} where `outs`
+ // is any EXTRA out beyond the batter's and `note` is the Advanced subtext line (empty string = nothing worth saying).
+ // outsBefore>=2: do nothing at all. The batter's own out alone ends the inning and the half-inning flip clears the bases anyway,
+ // and critically a run can never legally score alongside the inning's 3rd out (force OR tag/catch -- a caught fly ball ends the
+ // half-inning the instant the catch happens, before any tag-up could complete) -- simply touching nothing is already correct.
+ if(outsBefore>=2)return{outs:0,runs:0,note:''};
+ const air=k!=='ground ball',r1=base1,r2=base2,r3=base3;
+ if(air){
+  const tagOk=fName==='LF'||fName==='CF'||fName==='RF'; // only an outfield catch is deep enough to tag on -- infield pop-ups/shallow flies never allow it ("All times" rule)
+  if(!tagOk)return{outs:0,runs:0,note:(r1||r2||r3)?'no tag, runner'+((r1&&r2)||(r1&&r3)||(r2&&r3)?'s hold':' holds'):''};
+  if(r3&&!r1&&!r2){base3=false;bankRuns(1);return{outs:0,runs:1,note:'sac fly scores the runner from 3rd'}}
+  if(r2&&!r1&&!r3){if(fName==='RF'){base2=false;base3=true;return{outs:0,runs:0,note:'runner tags up from 2nd to 3rd'}}return{outs:0,runs:0,note:'no tag, runner holds at 2nd'}}
+  if(r1&&!r2&&!r3)return{outs:0,runs:0,note:'no tag, runner holds at 1st'};
+  if(r1&&r2&&!r3){if(fName==='RF'){base2=false;base3=true;return{outs:0,runs:0,note:'runner tags up from 2nd to 3rd, 1st holds'}}return{outs:0,runs:0,note:'no tag, runners hold'}}
+  if(r3&&r1&&!r2){base3=false;bankRuns(1);return{outs:0,runs:1,note:'sac fly scores the runner from 3rd, 1st holds'}}
+  if(r3&&r2&&!r1){base3=false;bankRuns(1);if(fName==='RF'){base2=false;base3=true;return{outs:0,runs:1,note:'sac fly scores the runner from 3rd, runner to 3rd'}}return{outs:0,runs:1,note:'sac fly scores the runner from 3rd, 2nd holds'}}
+  if(r1&&r2&&r3){base3=false;bankRuns(1);return{outs:0,runs:1,note:'sac fly scores the runner from 3rd, 1st and 2nd hold'}}
+  return{outs:0,runs:0,note:''};
+ }
+ // ground ball
+ const side=advSide(fName,holeTowardThird);
+ if(r1&&!r2&&!r3){
+  if(hard){base1=false;return{outs:1,runs:0,note:'double play'}}
+  base1=false;base2=true;return{outs:0,runs:0,note:'defense settles for the out, runner to 2nd'};
+ }
+ if(r2&&!r1&&!r3){
+  if(side==='adv'){base2=false;base3=true;return{outs:0,runs:0,note:'hit behind moves the runner to 3rd'}}
+  return{outs:0,runs:0,note:'checks to hold runner, out at 1st'};
+ }
+ if(r3&&!r1&&!r2){
+  if(hard){base3=false;bankRuns(1);return{outs:0,runs:1,note:'runner scores from 3rd, out at 1st'}}
+  return{outs:0,runs:0,note:'checks to hold runner, out at 1st'};
+ }
+ if(r1&&r2&&!r3){
+  if(side==='3B'){base1=true;base2=true;base3=false;return{outs:0,runs:0,note:'took force out at 3rd'}} // old r2 forced out at 3rd; batter->1st, old r1->2nd
+  base1=false;base2=false;base3=true;return{outs:1,runs:0,note:'double play, runner to 3rd'}; // DP at 2nd-1st erases old r1 + batter; old r2 was already past 2nd, advances uncontested
+ }
+ if(r1&&!r2&&r3){
+  if(hard){
+   base1=false; // DP erases old r1 + batter either way
+   if(outsBefore===0){base3=false;bankRuns(1);return{outs:1,runs:1,note:'double play, runner from 3rd scores'}} // 0 outs before -> DP only makes it 2, inning continues, this run is a normal separate score
+   return{outs:1,runs:0,note:'double play, run doesn\'t count'}; // 1 out before -> this DP IS the 3rd out. The runner from 3rd isn't "held" -- he's on his way and would normally score -- the run simply can't count once the inning ends on a force before he crosses
+  }
+  base1=false;base2=true;return{outs:0,runs:0,note:'checks runner at 3rd, moves up to 2nd'};
+ }
+ if(r2&&r3&&!r1){
+  if(hard){base3=false;bankRuns(1);base2=false;base3=true;return{outs:0,runs:1,note:'runner scores from 3rd, runner at 2nd advances'}}
+  return{outs:0,runs:0,note:'checks runners, hold at 2nd and 3rd'};
+ }
+ if(r1&&r2&&r3)return{outs:0,runs:0,note:'force out at home, bases stay loaded'}; // boolean occupancy is unchanged either way -- only WHO is on each base shifts, which this simplified model never tracked anyway
+ return{outs:0,runs:0,note:''};
+}
 function updInning(){$('inningArrow').textContent=half==='top'?'▲':'▼';$('inningNum').textContent=inning} // ▲ top (first/road half) / ▼ bottom (second/home half), standard scoreboard convention
 let shownRed=0,shownBlue=0; // old-school split-flap scoreboard flip: the front face holds what's shown now, the back face is pre-loaded with the
 // next number and rotated into view, then both faces are synced and the card snapped back to 0deg (no transition) so it's ready for the next flip
@@ -2008,9 +2084,9 @@ function padMenuLabel(){ // what the pause-menu Controller button should current
 let padBD=false;
 // v290: gamepad navigation for the pause menu itself (D-pad and Left Stick scroll the row list, A/RT "clicks" whichever row is highlighted) -- before
 // this, a controller could open/close the pause menu (Menu button) but had no way to actually change a setting in it; only mouse/touch could.
-const PM_NAV_IDS=['pm-pitcher','pm-loc','pm-innings','pm-cam','pm-amb','pm-lastpitch','pm-pad','pm-restart','pmresume'];
+const PM_NAV_IDS=['pm-pitcher','pm-loc','pm-innings','pm-baserunning','pm-cam','pm-amb','pm-lastpitch','pm-pad','pm-restart','pmresume'];
 // v342: same row-nav pattern as the pause menu's PM_NAV_IDS/pmNavFocus, for the pre-game Settings menu (#gsMenu) -- see pollPad()'s gsMenu branch.
-const GS_NAV_IDS=['gs-pitcher','gs-loc','gs-innings','gsDone'];
+const GS_NAV_IDS=['gs-pitcher','gs-loc','gs-innings','gs-baserunning','gsDone'];
 function gsNavItems(){return GS_NAV_IDS.map(id=>$(id)).filter(el=>el&&el.offsetParent!==null)}
 let gsNavSel=0,gsNavUpD=false,gsNavDownD=false,gsNavRepeatT=0;
 function gsNavFocus(i){
@@ -2160,7 +2236,7 @@ let paused=true,pauseStart=0; // starts paused behind the start-screen overlay (
 // v335: Pitcher Type / Pitch Location / Innings are now set from TWO places -- the in-game pause menu (pm-*) and the new pre-game Game Settings
 // menu on the side-select screen (gs-*, see ssSettingsBtn) -- both just read/write the same pitcherMode/pitchLocMode/inningsMode globals, so this
 // one function keeps whichever labels are in the DOM in sync no matter which menu triggered the change.
-function refreshSettingsLabels(){const p=PITCHER_MODES[pitcherMode],l=PITCHLOC_MODES[pitchLocMode],i=INNINGS_MODES[inningsMode]+(INNINGS_MODES[inningsMode]===1?' inning':' innings');$('pm-pitcher').textContent=p;$('pm-loc').textContent=l;$('pm-innings').textContent=i;$('gs-pitcher').textContent=p;$('gs-loc').textContent=l;$('gs-innings').textContent=i}
+function refreshSettingsLabels(){const p=PITCHER_MODES[pitcherMode],l=PITCHLOC_MODES[pitchLocMode],i=INNINGS_MODES[inningsMode]+(INNINGS_MODES[inningsMode]===1?' inning':' innings'),b=ADV_BASE_MODES[advBase];$('pm-pitcher').textContent=p;$('pm-loc').textContent=l;$('pm-innings').textContent=i;$('pm-baserunning').textContent=b;$('gs-pitcher').textContent=p;$('gs-loc').textContent=l;$('gs-innings').textContent=i;$('gs-baserunning').textContent=b}
 function refreshPauseLabels(){refreshSettingsLabels();$('pm-cam').textContent=CAMS[camI][0];$('pm-amb').textContent=AMB_LEVELS[ambSel][0];$('pm-lastpitch').textContent=lastPitchDataOn?'On':'Off';$('lastPitch').style.display=lastPitchDataOn?'block':'none';$('pm-pad').textContent=padMenuLabel()}
 function setPaused(p){if(p===paused)return;
  if(p){pauseStart=performance.now()/1000;paused=true;refreshPauseLabels();pmVisible=true;$('pm').classList.add('open');pmNavFocus(0)} // v290: reset the gamepad nav highlight to the top row every time the menu opens
@@ -3143,7 +3219,7 @@ async function olJoinMatch(code,statusEl){
   processNetEvLog(data.evLog); // v399: see olHostMatch()'s own watch() callback for why the debug evLog dump that used to sit here is gone
   processPingPong(data,'host'); // v398/v399: see its own comment
   processSwingDbg(data,'host'); // v403: see its own comment
-  if(data.settings){pitcherMode=data.settings.pitcherMode??pitcherMode;pitchLocMode=data.settings.pitchLocMode??pitchLocMode;inningsMode=data.settings.inningsMode??inningsMode;refreshSettingsLabels()} // v335: adopt the host's chosen game settings -- see hostMatch()'s own comment for why these ride along on the match doc itself
+  if(data.settings){pitcherMode=data.settings.pitcherMode??pitcherMode;pitchLocMode=data.settings.pitchLocMode??pitchLocMode;inningsMode=data.settings.inningsMode??inningsMode;advBase=data.settings.advBase??advBase;refreshSettingsLabels()} // v335: adopt the host's chosen game settings -- see hostMatch()'s own comment for why these ride along on the match doc itself
   oppHitAndPitch=!!data.homeHitAndPitch; // v356: joiner's opponent is always the host/home side -- kept live for the same reason as the host-side branch above
   if(data.hostReady)olPeerReady=true; // v318: the host's own beginGame() click, mirrored here so the joiner doesn't throw a pitch before the host's screen has actually unpaused
   if(data.host&&data.host.present){statusEl.style.color='';statusEl.textContent='Opponent connected!';$('ssOnlineStartBtn').classList.remove('hidden');if(!olAutoStarted){olAutoStarted=true;onlineActive=true;startPingHeartbeat();showTutorial()}}
@@ -3743,8 +3819,9 @@ addEventListener('keydown',e=>{
 // a match exists (olMatchCode), not just once a game is actually in progress (onlineActive), specifically so the pre-connection lobby case above
 // is covered too. The joiner needs no new handling at all: it already re-adopts data.settings unconditionally on every single snapshot of the
 // match doc, match-length, so this just gives that existing path a reason to fire again later instead of only once at join time.
-function syncSettings(){if(olMatchCode&&olRole==='host'&&window.YB_FB&&window.YB_FB.updateSettings)window.YB_FB.updateSettings(olMatchCode,{pitcherMode,pitchLocMode,inningsMode})}
+function syncSettings(){if(olMatchCode&&olRole==='host'&&window.YB_FB&&window.YB_FB.updateSettings)window.YB_FB.updateSettings(olMatchCode,{pitcherMode,pitchLocMode,inningsMode,advBase})}
 $('pm-pitcher').onclick=()=>{pitcherMode=(pitcherMode+1)%PITCHER_MODES.length;refreshPauseLabels();syncSettings()};
+$('pm-baserunning').onclick=()=>{advBase=(advBase+1)%ADV_BASE_MODES.length;refreshPauseLabels();syncSettings()};
 $('pm-pad').onclick=()=>{ // cycles: Auto -> each currently connected pad, by id -> back to Auto. Manual pick persists across sessions until changed back to Auto.
  const ids=['',...allPads().map(p=>p.id)];
  let i=ids.indexOf(padPrefId);if(i<0)i=0;
@@ -3759,6 +3836,7 @@ $('pm-innings').onclick=()=>{inningsMode=(inningsMode+1)%INNINGS_MODES.length;re
 $('gs-pitcher').onclick=()=>{pitcherMode=(pitcherMode+1)%PITCHER_MODES.length;refreshSettingsLabels();syncSettings()};
 $('gs-loc').onclick=()=>{pitchLocMode=(pitchLocMode+1)%PITCHLOC_MODES.length;refreshSettingsLabels();syncSettings()};
 $('gs-innings').onclick=()=>{inningsMode=(inningsMode+1)%INNINGS_MODES.length;refreshSettingsLabels();syncSettings()};
+$('gs-baserunning').onclick=()=>{advBase=(advBase+1)%ADV_BASE_MODES.length;refreshSettingsLabels();syncSettings()};
 $('ssSettingsBtn').onclick=()=>{refreshSettingsLabels();$('gsMenu').classList.add('open');gsNavFocus(0)};
 $('ssHostSettingsBtn').onclick=()=>{refreshSettingsLabels();$('gsMenu').classList.add('open');gsNavFocus(0)};
 $('gsDone').onclick=()=>{$('gsMenu').classList.remove('open')};
@@ -4088,7 +4166,7 @@ function airCatch(line){ // line = a line drive: fielders get no run credit, it 
  return best}
 const isFair=p=>p.z<0&&Math.abs(p.x)<-p.z; // inside the two foul lines (45 deg either side of the pitcher)
 function endHit(){
- let m,col='#fff',fd=null,fnote='';const d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
+ let m,col='#fff',fd=null,fnote='',outFd=null;const d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
  if(fairDec===null)fairDec=isFair(first.p);
  let wall=crossed,wallNote='';
  // A ball only belongs in the immediate HOME RUN / DOUBLE-off-the-wall branch below if it reached the fence WHILE STILL AIRBORNE (crossed.air) -- that
@@ -4135,8 +4213,8 @@ function endHit(){
   else if(k==='ground ball'){ // grounders: fielders and the infield decide
    fd=fieldTest();fnote=fieldNote(fd);
    const soft=Math.max(0,Math.min(1,(26-H.ev)/14)),infieldCut=FP.infield+6*soft; // a weakly-hit ball (down near vSoft and below) gets a wider auto-out radius; a well-struck one keeps the tighter 16m standard
-   if(!fd&&maxD<infieldCut){m='GROUND OUT';fnote=`never got out of the infield (rolled to ${maxD.toFixed(0)} m) - a fielder charges it`}
-   else if(fd)m='GROUND OUT';
+   if(!fd&&maxD<infieldCut){m='GROUND OUT';fnote=`never got out of the infield (rolled to ${maxD.toFixed(0)} m) - a fielder charges it`} // outFd stays null here -- no specific fielder credited, see endHit()'s OUT branch for the position-based side fallback this feeds Advanced baserunning
+   else if(fd){m='GROUND OUT';outFd=fd}
    else m='SINGLE';                                                         // through the infield = a single; only a ball that reaches the wall (gap or down a line) is a double
   }else{ // air balls
    const popCut=FP.infield; // a true pop-up/fly (not a line drive -- those keep their own speed-sensitive catch physics below) that comes down this
@@ -4155,9 +4233,9 @@ function endHit(){
    let fdGround=null;
    if(!fd&&!ac&&k==='line drive'&&first.d<FP.infield)fdGround=fieldTest(false,trk.filter(q=>q[4]>=first.t));
    if(false){}
-   else if(fd){m='LINE OUT';fnote=`${fd.f.n} was right there (ball went through his glove area at ${(fd.v*2.237).toFixed(0)} mph, ${fd.y.toFixed(2)} m off the ground)`}
-   else if(ac){m=k==='line drive'?'LINE OUT':(first.peak>=8&&first.d<14?'POP OUT':'FLY OUT');fnote=`${ac.f.n} got to it (reach ${ac.R.toFixed(1)} m, ball landed ${ac.dist.toFixed(1)} m away, in the air ${first.t.toFixed(1)} s, hit ${(H.ev*2.237).toFixed(0)} mph)`}
-   else if(fdGround){m='GROUND OUT';fnote=fieldNote(fdGround)}
+   else if(fd){m='LINE OUT';fnote=`${fd.f.n} was right there (ball went through his glove area at ${(fd.v*2.237).toFixed(0)} mph, ${fd.y.toFixed(2)} m off the ground)`;outFd=fd}
+   else if(ac){m=k==='line drive'?'LINE OUT':(first.peak>=8&&first.d<14?'POP OUT':'FLY OUT');fnote=`${ac.f.n} got to it (reach ${ac.R.toFixed(1)} m, ball landed ${ac.dist.toFixed(1)} m away, in the air ${first.t.toFixed(1)} s, hit ${(H.ev*2.237).toFixed(0)} mph)`;outFd=ac}
+   else if(fdGround){m='GROUND OUT';fnote=fieldNote(fdGround);outFd=fdGround}
    else{ // not right at anyone: in front of an outfielder = single; the gap or over his head = double
     let o=null,od=1e9;for(const f of OFD){const q=Math.hypot(first.p.x-f.x,first.p.z-f.z);if(q<od){od=q;o=f}}
     const depth=Math.hypot(o.x,o.z),shallow=first.d<depth-1.5,over=first.d>depth+2.5;
@@ -4226,7 +4304,19 @@ function endHit(){
     }}
    }
   }
-  if(/OUT/.test(m)){outs++;col='#ff8a80'}
+  if(/OUT/.test(m)){
+   outs++;col='#ff8a80';
+   if(advBase&&(base1||base2||base3)){ // nothing to resolve with the bases empty -- skip the whole thing, matches Basic exactly in that case
+    const hard=H.ev>=FP.vSoft,
+     holeThird=!!(outFd&&outFd.f.n==='SS'&&outFd.hx!==undefined&&outFd.hx<outFd.f.x),
+     fName=outFd?outFd.f.n:(k==='ground ball'?(first.p.x>0.5?'1B':first.p.x<-0.5?'SS':'P'):null); // no specific fielder credited (the "never got out of the infield, a fielder charges it" dribbler) -- fall back to a synthetic side purely from where it died, same 1B/2B(right)-vs-P/SS(left) split the real fielder names already map onto in advSide()
+    const r=resolveAdvancedBaserunning(k,outs-1,fName,holeThird,hard); // outs-1: outsBefore (outs already reflects THIS play's own batter-out from the line just above)
+    outs+=r.outs;
+    if(r.note)fnote=fnote?fnote+' — Advanced: '+r.note:'Advanced: '+r.note;
+    updBases();
+    if(r.runs&&checkWalkoff(preRed,preBlue)){walkoffPending=true;m='WALKOFF '+m} // a sac fly can absolutely be the walk-off itself -- same check every other scoring play already gets
+   }
+  }
   else{
    advanceRunners(hitBases(m));hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;col='#9cff9c';
    // v295: walk-off check -- see checkWalkoff()'s own declaration for what it tests. preRed/preBlue are captured once, above, before fairDec's
