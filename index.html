@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v424'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v425'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -978,7 +978,8 @@ let kidBat=null,kidBatMixer=null,kidBatAction=null,kidBatClipDur=0,kidBatReady=f
 // that has a real cross-client offset to seed from. // kidBatLoadActive tracks whether THIS load has already done its one-time reset/play -- separate from kidBatPhase because checked also leaves kidBatPhase at 1, so reusing `kidBatPhase!==1` as the loading branch's "just started" guard meant a new load begun right after a check swing was wrongly treated as already-in-progress and silently skipped its reset, leaving the clip frozen wherever the check-swing hold/ease had last left it instead of properly restarting the load animation. kidBatCheckActive is the equivalent one-time-init guard for the checked branch's own hold timer. kidBatCheckJustEnded flags the one frame where checked's hold naturally expired, so the idle branch's first frame (and ONLY that frame -- it clears itself immediately) can request the hand-bone blend via kidBatForceSnap; setting kidBatForceSnap directly at expiry doesn't work because that expiry frame still renders the checked pose itself (same source and target), consuming the flag a frame too early
 const KIDBAT_BAT_CORRECTION=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1),Math.PI);
 const KIDBAT_HAND_OFFSET=new THREE.Vector3(0,2,0); // reduced from 5 -- the gap in screenshots suggests the offset was too large, pulling the grip point too far from where his hand actually is
-let kidBatWasHand=false,kidBatSnapT=1,kidBatSnapPos=new THREE.Vector3(),kidBatSnapQuat=new THREE.Quaternion(),kidBatHandQ=new THREE.Quaternion(),kidBatHandoffYaw=null,kidBatHandoffPos=null,kidBatHandoffPosT=1,kidBatHandoffArmed=true,kidBatForceSnap=false,kidBatHandoffArmCount=0; // kidBatHandoffArmCount: v424 diag only -- counts how many times the handoff-capture block has fired all session, logged alongside each capture/freeze/unfreeze line so a repro can show whether a single load->swing transition captures ONCE (expected) or MULTIPLE times (would mean __useHand is flickering back to true and re-capturing a different, already-mid-blend pose each time -- a distinct bug from the freeze-threshold ones fixed so far) // kidBatHandoffPos/kidBatHandoffPosT: v418, same idea as kidBatHandoffYaw but for position -- see its own blend site below. Unlike the yaw blend (gated on sD, the swing's own progress value), this is gated on a real-time dt timer like kidBatSnapT, specifically so it still eases smoothly even when a MIRRORED swing's sD is already meaningfully past 0 on the very first frame it's ever rendered (network delivery took real time before this client ever saw it) -- an sD-gated blend window can already be closed before frame one, a dt-gated one can't. kidBatHandoffArmed: v419 -- false while frozen at the just-measured handoff pose (the body's own catch-up window hasn't ended yet), true once the blend has actually started; starts true so nothing is frozen before the first swing ever happens. // kidBatForceSnap lets code elsewhere (the checked->idle handoff) request the snapshot-blend even when __useHand stays continuously true across the transition (so kidBatWasHand itself never flips false->true) -- kidBatWasHand gets reset to true every __useHand frame regardless, so it can't carry a cross-frame "please resnap" request on its own
+let kidBatWasHand=false,kidBatSnapT=1,kidBatSnapPos=new THREE.Vector3(),kidBatSnapQuat=new THREE.Quaternion(),kidBatHandQ=new THREE.Quaternion(),kidBatHandoffYaw=null,kidBatHandoffPos=null,kidBatHandoffPosT=1,kidBatHandoffArmed=true,kidBatForceSnap=false,kidBatHandoffArmCount=0,kidBatHandoffQuat=null;
+const __KB_Z=new THREE.Vector3(0,0,1),__kbTmpQ1=new THREE.Quaternion(),__kbTmpQ2=new THREE.Quaternion(),__kbEu=new THREE.Euler(); // v425: reused scratch objects for the handoff blend's target-quaternion composition, avoiding per-frame allocation during the ~5-frame blend window // kidBatHandoffArmCount: v424 diag only -- counts how many times the handoff-capture block has fired all session, logged alongside each capture/freeze/unfreeze line so a repro can show whether a single load->swing transition captures ONCE (expected) or MULTIPLE times (would mean __useHand is flickering back to true and re-capturing a different, already-mid-blend pose each time -- a distinct bug from the freeze-threshold ones fixed so far) // kidBatHandoffPos/kidBatHandoffPosT: v418, same idea as kidBatHandoffYaw but for position -- see its own blend site below. Unlike the yaw blend (gated on sD, the swing's own progress value), this is gated on a real-time dt timer like kidBatSnapT, specifically so it still eases smoothly even when a MIRRORED swing's sD is already meaningfully past 0 on the very first frame it's ever rendered (network delivery took real time before this client ever saw it) -- an sD-gated blend window can already be closed before frame one, a dt-gated one can't. kidBatHandoffArmed: v419 -- false while frozen at the just-measured handoff pose (the body's own catch-up window hasn't ended yet), true once the blend has actually started; starts true so nothing is frozen before the first swing ever happens. // kidBatForceSnap lets code elsewhere (the checked->idle handoff) request the snapshot-blend even when __useHand stays continuously true across the transition (so kidBatWasHand itself never flips false->true) -- kidBatWasHand gets reset to true every __useHand frame regardless, so it can't carry a cross-frame "please resnap" request on its own
 const KIDBAT_YAW_BLEND_S=0.1; // render-only window (in sD) over which the real bat's visible yaw eases from the measured hand-bone angle at load-end into the true visA sweep, instead of popping straight to A_REST
 let kidBatSnapT2=1,kidBatSnapPos2=new THREE.Vector3(),kidBatSnapQuat2=new THREE.Quaternion();
 (function loadKidBatter(){
@@ -4463,14 +4464,24 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
    // window. yaw gets the identical treatment now too, sharing the same start-gate, so rotation and position stay in sync rather than one
    // drifting while the other holds. Purely cosmetic: hp/visA/contact physics/fan-trail recording are completely unaffected, so reach and
    // swing timing are untouched either way.
-   if(kidBatWasHand){ // just left hand-tracking this frame -- measure the hand bone's actual yaw AND position, and re-arm the gate below
-    const __eu=new THREE.Euler().setFromQuaternion(kidBatHandQ,'YXZ');
-    kidBatHandoffYaw=Math.PI/2-__eu.y;
+   if(kidBatWasHand){ // just left hand-tracking this frame -- capture the FULL last-rendered orientation and position, and re-arm the gate below
+    // v425: console data (armCount increments exactly once per swing, freeze holds sD=0/t=1.200 rock steady for ~15-20 consecutive frames,
+    // single clean unfreeze every time) rules out re-arming/flicker as the cause -- the freeze TIMING is correct. But a second repro nailed
+    // the actual mechanism: two debug-HUD frames with the IDENTICAL clip time (t=1.200 both), one still hand-tracked (ld=1) and the very next
+    // one already in this frozen branch (sw=1) -- same body pose, different-looking bat. That's not a blend artifact, it's that the FROZEN
+    // pose itself didn't match what hand-tracking had actually just been rendering. The old yaw-only capture (Math.PI/2-euler.y) decomposed
+    // the hand bone's full 3D orientation down to a single Y-axis angle, silently discarding any real pitch/roll the wrist had baked into it
+    // -- a batter's actual grip is not a pure yaw rotation, so that decomposition never faithfully reproduced the true hand-tracked pose in
+    // the first place, even on frame one of the freeze, well before any blend ever started. Fix: capture and hold the FULL quaternion
+    // (batG.quaternion itself, exactly what was on screen last frame) with zero decomposition -- guaranteed pixel-identical to real hand
+    // tracking, by construction, for as long as it's held.
+    if(!kidBatHandoffQuat)kidBatHandoffQuat=new THREE.Quaternion();
+    kidBatHandoffQuat.copy(batG.quaternion);
     if(!kidBatHandoffPos)kidBatHandoffPos=new THREE.Vector3();
     kidBatHandoffPos.copy(batG.position); // last frame's hand-tracked position, before it gets overwritten by hp just below
     kidBatHandoffPosT=0;kidBatHandoffArmed=false; // armed=false: frozen, waiting for the body's own catch-up window to actually end
-    kidBatHandoffArmCount++; // v424 diag: if this fires more than once per load->swing transition, __useHand is flickering back and forth and each re-capture is grabbing a DIFFERENT (already mid-blend) pose, not the one true load-end pose -- which would explain "fixed it, then a few degrees off, then flipped back" across repeated attempts far better than a single wrong freeze threshold would.
-    console.log('[LOADDBG] handoff CAPTURE (armCount='+kidBatHandoffArmCount+')',JSON.stringify({t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatActionTime:kidBatAction&&kidBatAction.time,kidBatSwingStartFrame,yaw:kidBatHandoffYaw,pos:kidBatHandoffPos.toArray().map(n=>+n.toFixed(4))}));
+    kidBatHandoffArmCount++; // v424 diag, kept: lets a future log confirm this still only fires once per swing
+    console.log('[LOADDBG] handoff CAPTURE (armCount='+kidBatHandoffArmCount+')',JSON.stringify({t:performance.now()/1000,kidBatPhase,loading,swinging,checked,kidBatActionTime:kidBatAction&&kidBatAction.time,kidBatSwingStartFrame,quat:kidBatHandoffQuat.toArray().map(n=>+n.toFixed(4)),pos:kidBatHandoffPos.toArray().map(n=>+n.toFixed(4))}));
    }
    // v423: v422's "has the clip moved a full 1/30s frame" gate was still an approximation, and in the single most common case it was
    // actually no looser than doing nothing at all -- kidBatSwingStartFrame is captured as kidBatAction.time right as load hands off, which
@@ -4494,8 +4505,8 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
     // the hand-tracking branch above) -- so 0 IS this pose's elevation, matching position/yaw's own "hold exactly what hand-tracking last
     // showed" rule.
     batG.position.copy(kidBatHandoffPos);
-    if(kidBatHandoffYaw!==null)batG.rotation.set(0,Math.PI/2-kidBatHandoffYaw,0);
-    batT.rotation.z=0;
+    if(kidBatHandoffQuat!==null)batG.quaternion.copy(kidBatHandoffQuat);
+    batT.rotation.set(0,0,0); // the captured quaternion already carries whatever elevation/tilt hand-tracking had baked into it -- batT must stay at identity or that tilt would be applied twice
     if(dbgOn)console.log('[LOADDBG] handoff FROZEN',JSON.stringify({t:performance.now()/1000,armCount:kidBatHandoffArmCount,kidBatActionTime:+kidBatAction.time.toFixed(4),swingStart:+KIDBAT_SWING_START.toFixed(4),sD:+sD.toFixed(4)}));
    }else{
     if(kidBatHandoffPos!==null&&!kidBatHandoffArmed){kidBatHandoffArmed=true;kidBatHandoffPosT=0;console.log('[LOADDBG] handoff UNFROZE -- clip reached swing start',JSON.stringify({t:performance.now()/1000,armCount:kidBatHandoffArmCount,kidBatActionTime:+kidBatAction.time.toFixed(4),swingStart:+KIDBAT_SWING_START.toFixed(4),sD:+sD.toFixed(4),hp:hp.toArray().map(n=>+n.toFixed(4))}))} // just crossed out of the catch-up window -- start the position, yaw AND elevation blends fresh, from the same captured point/angle
@@ -4517,10 +4528,22 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
      // live repro: position and yaw matched the previous (correctly held) frame exactly, but the bat still visibly tilted, because nothing
      // was blending elevation away from its hand-tracked 0. Now elevation shares the identical __bw2 weight too: 1 right as armed (pure 0,
      // matching the frozen/hand-tracked pose exactly), easing to 0 (pure visEl) over the same window -- all three stay in lockstep.
+     // v425: rotation blend switched from a plain linear lerp of the decomposed yaw angle to a proper quaternion slerp between the captured
+     // full handoff quaternion and the live driven pose (composed fresh each frame as yaw-then-elevation, matching the batG/batT hierarchy).
+     // Avoids two real problems the yaw-angle lerp had: it could sweep the long way around when the two angles were more than ~180 degrees
+     // apart (not the dominant cause here, but a latent risk), and it only ever interpolated a single discarded axis, never the real
+     // pitch/roll the captured quaternion actually carries -- so even a "smooth" yaw blend was blending toward the wrong starting pose. batT
+     // stays at identity through the whole blend (the target's elevation is folded into __qTarget instead) and only returns once the blend
+     // finishes and control falls through to the steady-state batG.rotation/batT.rotation.z lines above.
      const __bw2=1-kidBatHandoffPosT/0.08;
      batG.position.lerp(kidBatHandoffPos,__bw2);
-     if(kidBatHandoffYaw!==null)batG.rotation.y=Math.PI/2-(visA+(kidBatHandoffYaw-visA)*__bw2);
-     batT.rotation.z=visEl*(1-__bw2);
+     if(kidBatHandoffQuat!==null){
+      __kbTmpQ1.setFromEuler(__kbEu.set(0,Math.PI/2-visA,0));
+      __kbTmpQ2.setFromAxisAngle(__KB_Z,visEl);
+      __kbTmpQ1.multiply(__kbTmpQ2); // compose parent(yaw)*child(elevation), matching how batT's local rotation actually composes under batG
+      batG.quaternion.copy(kidBatHandoffQuat).slerp(__kbTmpQ1,1-__bw2);
+      batT.rotation.set(0,0,0);
+     }
      kidBatHandoffPosT+=dt;
     }
    }
