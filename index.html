@@ -35,6 +35,7 @@ canvas{display:block;width:100%;height:100%}
 #inningBox{background:#000a;padding:6px 10px;border-radius:8px;font-weight:800;font-size:15px;color:#fff;display:flex;align-items:center;gap:3px;white-space:nowrap}
 #inningArrow{color:#ffd23f;font-size:11px;line-height:1}
 #msg{top:36%;width:100%;text-align:center;font-size:clamp(28px,7vw,56px);font-weight:800}
+#advNote{top:45%;width:100%;text-align:center;font-size:clamp(13px,2.2vw,18px);color:#cfe8ff}
 #sub{top:48%;width:100%;text-align:center;font-size:clamp(14px,2.5vw,20px)}
 /* v390b: #contHint always shows the "how do I skip this" instruction for the result screen currently up, completely independent of #sub -- #sub
  itself is intentionally debug-only (see the Debug button's own onclick toggling its display, and the comment by it) and CONTINUE_HINT used to be
@@ -296,6 +297,7 @@ exactly the "floats up to the top-left" bug. */
  available -- "much bigger on iphone scale wise than it is on PC" even though the raw px size is width-driven and not literally device-specific.
  Capping the clamp lower here, the same way the pitching widget already gets a dedicated short-viewport size instead of just scaling with width. */
  #msg{font-size:clamp(20px,6vw,34px)}
+ #advNote{font-size:clamp(11px,1.8vw,15px)}
  #sub{font-size:clamp(12px,2vw,16px)}
  #contHint{font-size:11px}
  #netWait{font-size:12px}
@@ -317,7 +319,7 @@ exactly the "floats up to the top-left" bug. */
 <div id="padDiag">🎮 diag: starting…</div>
 <div id="rotateScreen" class="hidden"><div id="rotateIcon">📱</div><div class="msg">Rotate your device to play</div><div style="font-size:13px;opacity:.75">Yard Ball plays best in landscape</div></div>
 <div id="titleScreen"><div id="verTag"></div><div id="titleArtWrap"><img id="titleImg" alt="Yard Ball" width="1024" height="575"><div id="titleFooter"><div id="pressPrompt">▶ PRESS TO PLAY</div><div id="titleModeButtons" class="hidden"><button id="modeLocalBtn">🏠 LOCAL PLAY</button><button id="modeOnlineBtn">🌐 ONLINE PLAY</button></div></div></div></div><div id="localModeScreen" class="hidden"><div id="lmTitle">LOCAL PLAY</div><div id="lmButtons"><button id="lmSwapPassBtn" class="lmBtn">🔁 Swap &amp; Pass<span class="lmDesc">One controller, hot-seat hitting -- ready up and go. Hit Only; the CPU always pitches.</span></button><button id="lmPvcBtn" class="lmBtn">🤖 Player vs CPU<span class="lmDesc">Pick Home or Away and play against a CPU opponent.</span></button><button id="lmPvpBtn" class="lmBtn">🎮 Player vs Player<span class="lmDesc">Two controllers, two sides. Leave one unclaimed for Swap &amp; Pass instead.</span></button></div><button id="lmBackBtn">← Back</button></div><div id="sideSelectScreen" class="hidden"><div id="ssTitle">CHOOSE YOUR SIDES</div><div id="ssArtWrap"><img id="ssImg" alt="Away Team / Home Team" width="1024" height="575"></div><div id="ssPanels"><div id="ssRedPanel" class="ssPanel"><div class="ssLocalBody"><div id="ssRedBind" class="ssBindLabel">Unclaimed</div><div id="ssRedPitchRow" class="olPitchRow hidden"><span id="ssRedArrowL" class="olArrow">◀</span><button id="ssRedPitch" class="ssPitchBtn">Hit Only</button><span id="ssRedArrowR" class="olArrow">▶</span></div><div id="ssRedPitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssRedBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olRedPickWrap" class="olPickWrap"><button id="olRedPickBtn" class="olPickBtn">🚶 Join · Away</button></div><div id="olRedPitchWrap" class="olPitchWrap hidden"><div id="olRedBind" class="ssBindLabel"></div><div id="olRedPitchRow" class="olPitchRow"><span id="olRedArrowL" class="olArrow">◀</span><button id="olRedPitch" class="ssPitchBtn">Hit Only</button><span id="olRedArrowR" class="olArrow">▶</span></div><div id="olRedPitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olRedLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olRedBackBtn" class="olBackBtn">← Back</button></div><div id="olRedActionWrap" class="olActionWrap hidden"><button id="olJoinBtn" class="hidden">Join a Game</button><div id="olJoinPane" class="hidden"><input id="olJoinCode" maxlength="6" placeholder="CODE" inputmode="none" autocomplete="off" autocapitalize="characters"><div id="olKeypad"></div><button id="olJoinConnectBtn">Connect</button><div id="olStatus2" class="olStatus"></div></div></div></div></div><div id="ssBluePanel" class="ssPanel"><div class="ssLocalBody"><div id="ssBlueBind" class="ssBindLabel">Unclaimed</div><div id="ssBluePitchRow" class="olPitchRow hidden"><span id="ssBlueArrowL" class="olArrow">◀</span><button id="ssBluePitch" class="ssPitchBtn">Hit Only</button><span id="ssBlueArrowR" class="olArrow">▶</span></div><div id="ssBluePitchHint" class="ssPitchHint">🕹️ flick stick, arrows, or D-pad to toggle</div><button id="ssBlueBackBtn" class="olBackBtn hidden">← Back</button></div><div class="ssOnlineBody hidden"><div id="olBluePickWrap" class="olPickWrap"><button id="olBluePickBtn" class="olPickBtn">🏠 Host · Home</button></div><div id="olBluePitchWrap" class="olPitchWrap hidden"><div id="olBlueBind" class="ssBindLabel"></div><div id="olBluePitchRow" class="olPitchRow"><span id="olBlueArrowL" class="olArrow">◀</span><button id="olBluePitch" class="ssPitchBtn">Hit Only</button><span id="olBlueArrowR" class="olArrow">▶</span></div><div id="olBluePitchHint" class="ssPitchHint show">🕹️ left stick / D-pad to toggle</div><button id="olBlueLockBtn" class="olLockBtn">🔒 Lock In</button><button id="olBlueBackBtn" class="olBackBtn">← Back</button></div><div id="olBlueActionWrap" class="olActionWrap hidden"><button id="olHostBtn" class="hidden">Host a Game</button><button id="ssHostSettingsBtn" class="hidden">⚙ Game Settings</button><div id="olHostPane" class="hidden"><div style="font-size:11px;opacity:.6">Share this code:</div><div id="olCode">----</div><div id="olStatus" class="olStatus"></div></div></div></div></div></div><div id="ssLocalHint" class="ssHint">Tap or click a side to claim it, or D-pad/stick left-right then A (keyboard: ←/→ then Enter). Once claimed, left/right (or the arrows) set Hit Only vs Hit &amp; Pitch for a gamepad-claimed side instead of switching sides -- press Back (or Esc/B) to unclaim and pick a different side.</div><div id="ssOnlineHint" class="ssHint hidden">Pick Join/Away or Host/Home to lock onto that side -- Back undoes it. Hosting always plays Home; joining always plays Away.</div><div id="ssButtons"><button id="ssStartBtn">▶ START LOCAL GAME</button><button id="ssSettingsBtn">⚙ Game Settings</button><button id="ssOnlineStartBtn" class="hidden">▶ START</button></div><button id="ssBackBtn">← Back</button></div><div id="startScreen" class="hidden"><div id="startCard"><img id="startImg" alt="Swing Mechanic: Hold &amp; Release"></div><button id="startBtn">▶ PLAY BALL</button></div><div id="gameOverScreen" class="hidden"><div id="goCard"><div id="goWinner"></div><div id="goScore"></div><div id="goInnings"></div><button id="goPlayAgain">Play Again</button></div></div><div id="pitcherOverlay" class="hidden"><div id="poTitle">🎯 PITCHER</div><div id="poStep"></div><div id="poCompass"></div><div id="poAim" class="hidden"><div id="poTypeLabel"></div><div id="poAimZone"><div id="poStrikeZone"></div><div id="poAimDot"></div></div><div id="poLoadMeter"><div id="poLoadFill"></div></div></div><div id="poHint"></div></div>
-<div class="h" id="sbrow"><div id="scores"><div class="teamScore" id="scoreRed"><div class="flipCard" id="scoreRedCard"><div class="face front" id="scoreRedFront">0</div><div class="face back" id="scoreRedBack">0</div></div></div><div class="teamScore" id="scoreBlue"><div class="flipCard" id="scoreBlueCard"><div class="face front" id="scoreBlueFront">0</div><div class="face back" id="scoreBlueBack">0</div></div></div></div><div id="sb"></div><div id="bases"><div class="base" id="b2"></div><div class="base" id="b3"></div><div class="base" id="b1"></div></div><div id="inningBox"><span id="inningArrow">▲</span><span id="inningNum">1</span></div></div><div class="h" id="msg"></div><div class="h" id="sub"></div><div class="h" id="contHint"></div><div class="h" id="netWait"></div>
+<div class="h" id="sbrow"><div id="scores"><div class="teamScore" id="scoreRed"><div class="flipCard" id="scoreRedCard"><div class="face front" id="scoreRedFront">0</div><div class="face back" id="scoreRedBack">0</div></div></div><div class="teamScore" id="scoreBlue"><div class="flipCard" id="scoreBlueCard"><div class="face front" id="scoreBlueFront">0</div><div class="face back" id="scoreBlueBack">0</div></div></div></div><div id="sb"></div><div id="bases"><div class="base" id="b2"></div><div class="base" id="b3"></div><div class="base" id="b1"></div></div><div id="inningBox"><span id="inningArrow">▲</span><span id="inningNum">1</span></div></div><div class="h" id="msg"></div><div class="h" id="advNote"></div><div class="h" id="sub"></div><div class="h" id="contHint"></div><div class="h" id="netWait"></div>
 <div class="h" id="dbg"></div><div class="h" id="bar"><div id="fill"></div></div>
 <div class="h" id="pad" style="left:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:12px"></div><div class="h" id="hint">Hold (Space / touch / A or RT) to stride &amp; load · release to swing · press again right away = check swing · B / Right-click = next pitch · C = change camera</div>
 <div class="h" id="lastPitch" style="right:10px;bottom:calc(36px + env(safe-area-inset-bottom,0px));font-size:13px;background:#000a;padding:4px 10px;border-radius:6px;display:none"></div>
@@ -477,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v426'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v427'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -621,6 +623,33 @@ function advanceRunners(n){ // n = bases the batter reaches: 1 single, 2 double,
  if(n===1)base1=true;else if(n===2)base2=true;else if(n===3)base3=true;
  bankRuns(runs)}
 function advanceWalk(){const r1=base1,r2=base2,r3=base3;let runs=0;if(r1){if(r2){if(r3)runs=1;base3=true}base2=true}base1=true;bankRuns(runs)}
+// v427: Advanced baserunning on SINGLES -- Basic (advanceRunners(1), unchanged, still the fallback) is strict station-to-station
+// every time: 1st->2nd, 2nd->3rd, 3rd scores, no variation. Advanced resolves each existing runner independently off two signals
+// already sitting in endHit() for every hit -- first.p.x (which side of dead center it was fielded on) and first.d (how deep) --
+// then combines them, same compositional pattern as resolveAdvancedBaserunning() for outs.
+// sideRight: fielded right of center (first.p.x>0) means a LONGER throw back to 3rd (right-center/RF territory is nearly as long a
+// throw as straight from RF), so the 1st-base runner can stretch to 3rd; left of center (LF/left-center) is a short throw home to
+// 3rd and holds him at 2nd. This is continuous off the actual fielded position, not a 3-way LF/CF/RF bucket -- a ball CF ran down in
+// left-center reads as "left" and one in right-center reads as "right", which is what actually decides the throw, not which of the
+// three outfielders is nearest.
+// shallow: first.d<20 (roughly halfway between the infield cutoff at 16m and where outfielders stand, 21.6-25.5m) -- barely past the
+// infield, not enough time/depth for the defense to be stretched. Holds the 2nd-base runner at 3rd instead of scoring, and caps the
+// 1st-base runner at 2nd regardless of side (not enough to stretch even to the "long throw" side).
+function resolveAdvancedSingle(sideRight,shallow){
+ const r1=base1,r2=base2,r3=base3;let runs=0,note='';
+ if(r3){base3=false;runs++} // 3rd always scores on any single, any depth -- he's already too close to home for a shallow one to matter; identical to Basic's own behavior, so never worth a note on its own
+ if(r2){
+  if(shallow){base2=false;base3=true;note='checks the runner, holds at 3rd'} // same end state Basic already gives a 2nd-base runner on ANY single -- only worth a note so the player sees Advanced deliberately chose to hold him, not that nothing ran
+  else{base2=false;runs++;note='runner scores from 2nd'}
+ }
+ if(r1){
+  base1=false;
+  if(!shallow&&sideRight){base3=true;note=note?note+', runner stretches to 3rd':'runner stretches to 3rd'} // mutually exclusive with r2's shallow->3rd move above (that needs shallow=true, this needs shallow=false), so never a double-claim on base3
+  else base2=true; // station-to-station to 2nd -- identical to Basic, no note needed
+ }
+ base1=true;bankRuns(runs);
+ return{runs,note};
+}
 function updBases(){$('b1').classList.toggle('on',base1);$('b2').classList.toggle('on',base2);$('b3').classList.toggle('on',base3)}
 // v426: "Advanced" baserunning on batted-ball OUTS. Basic (the ~15 lines above, unchanged) is what the game always did until now: any
 // out holds every runner exactly where they were, no tag-ups, no force reads, no double plays. That was always a known placeholder
@@ -1495,7 +1524,7 @@ function startPitch(now,human){ // v349: `human` ({type,tx,ty}), when passed, is
  if(t.kn){P.kx=kGen(.7,T);P.ky=kGen(.3,T);P.dxT=kD(P.kx,T);P.dyT=kD(P.ky,T)} // sideways force ~0.4-0.9 m/s^2, vertical about half that
  pc++;if(battingTeam==='red')pcRed++;else pcBlue++; // v313: this pitch is being thrown TO whoever battingTeam says is up right now
  stopPitchAudio();path.length=0;fanN=0;fanG.setDrawRange(0,0);snap=null;holdNext=false;resLines=[];tRel=now+C.WIND+3/30;st='windup';contacted=missed=false;swungFor=false;landed=false;first=null;maxD=0;crossed=null;peak=0;fairDec=null;trk.length=0;trailPts.length=0;setTrail(); // +3 frames now -- feedback pattern was early at 0, closer but still early at +2, so incrementing once more. v402: trailPts cleared here too now -- see applyNetPitchStart()'s own comment for the full report; redundant with continuePress()'s own clear on this (the real batter's) side today, but guarantees it rather than depending on that still being true
- $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
+ $('msg').textContent='';$('sub').textContent='';$('advNote').textContent='';$('contHint').textContent='';
  if(onlineActive&&iAmBatting())netSend('pitchStart',{tIdx:TYPES.indexOf(t),sp,T,a:{x:a.x,y:a.y,z:a.z},v:{x:v.x,y:v.y,z:v.z},ph:P.ph,tx,ty,inZ:P.inZ,kx:P.kx||null,ky:P.ky||null,dxT:P.dxT,dyT:P.dyT,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
 }
 // ---- v349: human pitching (local only -- see hitAndPitch's own declaration) ----------------------------------------------------------------------
@@ -1917,7 +1946,7 @@ function continuePress(src){ // the dedicated "advance past a result" input (B /
  const n=performance.now()/1000;
  holdNext=false;
  $('dbg').innerHTML=$('dbg').innerHTML.replace(/<br><b>[^<]*next pitch<\/b>/,'');
- $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
+ $('msg').textContent='';$('sub').textContent='';$('advNote').textContent='';$('contHint').textContent='';
  resLines=[];snap=null;trailPts.length=0;setTrail();
  ball.position.y=-9;shd.position.y=-9;
  kidPitcherIdleT=0; // fresh idle phase -- a clean "ready" pose instead of wherever the post-swing settle happened to leave off
@@ -3474,7 +3503,7 @@ function applyNetAdvance(){ // v325: mirrors continuePress()'s own result-cleari
 function applyNetAdvanceNow(){ // the actual transition, pulled out of applyNetAdvance() so applyNetResultNow() can fire it immediately too, the
  // instant OUR OWN result actually appears, for a stashed advance that arrived before we were ready for it (see netPendingAdvance's own comment).
  if(st!=='result')return; // belt-and-suspenders -- every call site already checks this, but a second caller is exactly how that kind of guard bites later if it's ever dropped
- $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';holdNext=false;ball.position.y=-9;shd.position.y=-9;st='wait';
+ $('msg').textContent='';$('sub').textContent='';$('advNote').textContent='';$('contHint').textContent='';holdNext=false;ball.position.y=-9;shd.position.y=-9;st='wait';
  // v387: this used to leave tNext completely untouched -- the only thing that HAD set it was applyNetResultNow()'s own `tNext=now+1.8` (how long
  // the result stays up), anchored to when the RESULT arrived, not to when 'advance' does. tick()'s own auto-pitch-trigger gates purely on
  // `now>=tNext`, so a defending Hit & Pitch player's next pick phase ended up gated behind whatever was left of that unrelated 1.8s timer --
@@ -3591,7 +3620,7 @@ function applyNetPitchStart(d,obsAt){ // spectator only -- mirrors startPitch()'
  // before we'd even reached 'windup' yet, replay it right now. st is already 'windup' at this point, so applyNetSwing()'s own gate lets it
  // through normally -- this just makes sure it isn't the LAST thing to ever ask "has windup started yet" and get a stale "no".
  if(netPendingSwing){const d=netPendingSwing;netPendingSwing=null;applyNetSwing(d)}
- $('msg').textContent='';$('sub').textContent='';$('contHint').textContent='';
+ $('msg').textContent='';$('sub').textContent='';$('advNote').textContent='';$('contHint').textContent='';
 }
 function applyNetSwing(d){ // spectator only -- d.tsOff is the batting side's swing start time, expressed relative to THAT pitch's own tRel, so it
  // carries over correctly onto the spectator's own (NET_DELAY-shifted) tRel and the swing animates in the same relative position in the pitch.
@@ -3722,7 +3751,7 @@ function applyNetResultNow(d){ // spectator only -- the actual state-transition 
  // v406: this is only ever checked ONCE, right here -- if the data hasn't actually arrived yet (still in flight), there was nothing this line
  // could do about that on its own. awaitingLateSwingDbg is what keeps listening past this one check -- see processSwingDbg()'s own comment.
  awaitingLateSwingDbg=!applyPendingSwingDbg();
- $('msg').textContent=d.msg||'';$('msg').style.color=d.col||'#fff';$('sub').textContent=d.sub||'';
+ $('msg').textContent=d.msg||'';$('msg').style.color=d.col||'#fff';$('sub').textContent=d.sub||'';$('advNote').textContent=d.adv||'';
  // v332: don't force `swinging` off here either -- same reasoning as startNetHit() above. A quick-settling play (e.g. a routine grounder) can have
  // its 'result' event arrive well before the swing's own natural duration (tick()'s `ts+C.SW+0.45` timeout) has elapsed, so forcing it false here
  // cut the follow-through short exactly like startNetHit() did -- the real batter's own code never force-clears `swinging` anywhere; it always
@@ -4036,13 +4065,17 @@ const CONTINUE_HINT=' — B / Right-click for next pitch'; // the dedicated cont
 // with nothing to add.
 function continueHintStandalone(){return (onlineActive&&!iAmBatting())?'Waiting for opponent...':CONTINUE_HINT.replace(/^ — /,'')}
 function continueHintSuffix(){return (onlineActive&&!iAmBatting())?'':CONTINUE_HINT}
-function say(m,s,col){updateScout(m);m=updateCount(m);$('msg').textContent=m;$('msg').style.color=col||'#fff';$('sub').textContent=s||'';
+function say(m,s,col,adv){updateScout(m);m=updateCount(m);$('msg').textContent=m;$('msg').style.color=col||'#fff';$('sub').textContent=s||'';
+ // v427: adv -- the Advanced-baserunning result line (e.g. "Runner scores from 2nd"), always visible regardless of dbgOn, unlike #sub's own
+ // detail text (see #sub's dbgOn-gated display toggle). Separate element/param from s/#sub entirely: #sub is still debug-only fielding detail,
+ // this is the ordinary player-facing line every player sees under the result, Basic or Advanced, Debug on or off.
+ $('advNote').textContent=adv||'';
  // v390b: always set the always-visible continue-hint here, in the one shared place every result funnels through -- regardless of dbgOn, unlike
  // #sub's own detail text (see #contHint's own CSS comment for the full why).
  $('contHint').textContent=continueHintStandalone();
  updSB();tNext=performance.now()/1000+1.8;st='result';holdNext=true;
  if(P)$('lastPitch').textContent=`Last Pitch: ${P.t.n} ${(P.sp*2.237).toFixed(0)}mph`;
- if(onlineActive&&iAmBatting())netSend('result',{msg:m,sub:s,col,contacted,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
+ if(onlineActive&&iAmBatting())netSend('result',{msg:m,sub:s,col,adv,contacted,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
  // v328: `contacted` added -- see applyNetResult()'s own comment for why
 } // moved here from startPitch() -- "Last Pitch" was updating the instant the NEXT pitch started its windup, before it even reached the plate, so it was really showing "the pitch about to happen" rather than the one you just saw. say() is the one shared place every outcome (ball/strike/swing-and-miss/every hit result) funnels through, so this now updates exactly when the result is known, same as everything else it drives (msg/sub text, holdNext)
 // v314: Pitches/Hits read from whichever team's own counters match who's actually up right now (pcRed/hitsRed or pcBlue/hitsBlue), instead of one
@@ -4166,7 +4199,7 @@ function airCatch(line){ // line = a line drive: fielders get no run credit, it 
  return best}
 const isFair=p=>p.z<0&&Math.abs(p.x)<-p.z; // inside the two foul lines (45 deg either side of the pitcher)
 function endHit(){
- let m,col='#fff',fd=null,fnote='',outFd=null;const d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
+ let m,col='#fff',fd=null,fnote='',outFd=null,advN='';const d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
  if(fairDec===null)fairDec=isFair(first.p);
  let wall=crossed,wallNote='';
  // A ball only belongs in the immediate HOME RUN / DOUBLE-off-the-wall branch below if it reached the fence WHILE STILL AIRBORNE (crossed.air) -- that
@@ -4312,20 +4345,22 @@ function endHit(){
      fName=outFd?outFd.f.n:(k==='ground ball'?(first.p.x>0.5?'1B':first.p.x<-0.5?'SS':'P'):null); // no specific fielder credited (the "never got out of the infield, a fielder charges it" dribbler) -- fall back to a synthetic side purely from where it died, same 1B/2B(right)-vs-P/SS(left) split the real fielder names already map onto in advSide()
     const r=resolveAdvancedBaserunning(k,outs-1,fName,holeThird,hard); // outs-1: outsBefore (outs already reflects THIS play's own batter-out from the line just above)
     outs+=r.outs;
-    if(r.note)fnote=fnote?fnote+' — Advanced: '+r.note:'Advanced: '+r.note;
+    if(r.note)advN=r.note.charAt(0).toUpperCase()+r.note.slice(1);
     updBases();
     if(r.runs&&checkWalkoff(preRed,preBlue)){walkoffPending=true;m='WALKOFF '+m} // a sac fly can absolutely be the walk-off itself -- same check every other scoring play already gets
    }
   }
   else{
-   advanceRunners(hitBases(m));hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;col='#9cff9c';
+   if(advBase&&m==='SINGLE'){const rs=resolveAdvancedSingle(first.p.x>0,first.d<20);if(rs.note)advN=rs.note.charAt(0).toUpperCase()+rs.note.slice(1)}
+   else advanceRunners(hitBases(m));
+   hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;col='#9cff9c';
    // v295: walk-off check -- see checkWalkoff()'s own declaration for what it tests. preRed/preBlue are captured once, above, before fairDec's
    // whole if/else-if/else chain, so this is covered no matter which branch resolves the hit (this one, or the wall-reaching one above it).
    if(checkWalkoff(preRed,preBlue)){walkoffPending=true;m='WALKOFF '+m}
   }
   S=B=0}
  if(wallNote)fnote=wallNote+(fnote?'; '+fnote:'');
- say(m,`${P.t.n} · ${(P.sp*2.237).toFixed(0)} mph · ${det}${fnote?' · '+fnote:''}`,col);
+ say(m,`${P.t.n} · ${(P.sp*2.237).toFixed(0)} mph · ${det}${fnote?' · '+fnote:''}`,col,advN);
  $('sub').textContent+=continueHintSuffix();}
 // ---- loop ----
 // ---- audio: strike (hard / soft), pitch-in-flight whoosh ----
