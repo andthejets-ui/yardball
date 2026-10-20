@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v428'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v429'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -583,6 +583,22 @@ function wouldEndAfterTop(){ // v335: same idea as wouldEndAfterBottom(), for co
  // batting the bottom) doesn't need to bat at all if they're already leading once the top half just completed is the last planned inning or any
  // extra inning. Only needs the lead check, not the tie check -- a tie here still has to play the bottom out as normal.
  return inning>=INNINGS_MODES[inningsMode]&&scoreBlue>scoreRed;
+}
+// v429: inningFlipPreview() -- say() calls this so the result screen itself can tell the player "Inning Over -- Red to Hit in Bot of 2nd" the
+// moment the 3rd out happens, instead of leaving them to find out only after they press continue and the real flip (in continuePress(), above)
+// actually runs. Runs BEFORE that flip, off the still-current (pre-flip) half/inning/battingTeam/scores, so it has to predict the same thing
+// continuePress() computes a few lines down -- rather than duplicate wouldEndAfterBottom()/wouldEndAfterTop()'s own logic twice, this mirrors
+// them directly, evaluated pre-flip instead of post-flip (wouldEndAfterBottom() reads a POST-flip `inning` that's already +1 for a completed
+// bottom half, which is exactly today's still-current `inning` pre-flip -- its `inning-1` collapses right back to that; wouldEndAfterTop()'s
+// own `inning` doesn't move across the flip at all for a completed top, so it needs no translation either way).
+function inningFlipPreview(){
+ if(outs<3||walkoffPending)return''; // walkoffPending ends the game outright on the next click (see continuePress()) -- that's its own Game Over moment, not a "next half" to announce
+ const completingBottom=half==='bottom',
+  gameEndsHere=completingBottom?(inning>=INNINGS_MODES[inningsMode]&&scoreRed!==scoreBlue):(inning>=INNINGS_MODES[inningsMode]&&scoreBlue>scoreRed);
+ if(gameEndsHere)return''; // no "next half" to announce -- continuePress() ends the game on the next click instead; the Game Over screen covers it
+ const nextHalf=half==='top'?'bottom':'top',nextInning=nextHalf==='top'?inning+1:inning,
+  nextTeam=nextHalf==='top'?'Red':'Blue',halfWord=nextHalf==='top'?'Top':'Bot';
+ return `Inning Over — ${nextTeam} to Hit in ${halfWord} of ${nextInning}`;
 }
 function checkGameEnd(iAmEnding){ // called from continuePress() right after a bottom half completes (see its own comment). iAmEnding: see endGame()'s own parameter -- threaded through from continuePress()'s pre-flip capture, not re-derived here
  if(!wouldEndAfterBottom())return false;
@@ -4069,13 +4085,17 @@ function say(m,s,col,adv){updateScout(m);m=updateCount(m);$('msg').textContent=m
  // v427: adv -- the Advanced-baserunning result line (e.g. "Runner scores from 2nd"), always visible regardless of dbgOn, unlike #sub's own
  // detail text (see #sub's dbgOn-gated display toggle). Separate element/param from s/#sub entirely: #sub is still debug-only fielding detail,
  // this is the ordinary player-facing line every player sees under the result, Basic or Advanced, Debug on or off.
- $('advNote').textContent=adv||'';
+ // v429: appends the inning-over preview (see inningFlipPreview()'s own comment) onto whatever Advanced-baserunning note is already there --
+ // outs is already fully updated by this point (updateCount() above handles the strikeout case; endHit()'s OUT branch already handled the
+ // batted-ball case before calling say() at all), so this is the earliest point the 3rd out is known, same funnel every outcome passes through.
+ const flip=inningFlipPreview(),fullAdv=adv?(flip?adv+' — '+flip:adv):flip;
+ $('advNote').textContent=fullAdv;
  // v390b: always set the always-visible continue-hint here, in the one shared place every result funnels through -- regardless of dbgOn, unlike
  // #sub's own detail text (see #contHint's own CSS comment for the full why).
  $('contHint').textContent=continueHintStandalone();
  updSB();tNext=performance.now()/1000+1.8;st='result';holdNext=true;
  if(P)$('lastPitch').textContent=`Last Pitch: ${P.t.n} ${(P.sp*2.237).toFixed(0)}mph`;
- if(onlineActive&&iAmBatting())netSend('result',{msg:m,sub:s,col,adv,contacted,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
+ if(onlineActive&&iAmBatting())netSend('result',{msg:m,sub:s,col,adv:fullAdv,contacted,state:netSnapshot()}); // v317: offline is untouched -- onlineActive is always false there
  // v328: `contacted` added -- see applyNetResult()'s own comment for why
 } // moved here from startPitch() -- "Last Pitch" was updating the instant the NEXT pitch started its windup, before it even reached the plate, so it was really showing "the pitch about to happen" rather than the one you just saw. say() is the one shared place every outcome (ball/strike/swing-and-miss/every hit result) funnels through, so this now updates exactly when the result is known, same as everything else it drives (msg/sub text, holdNext)
 // v314: Pitches/Hits read from whichever team's own counters match who's actually up right now (pcRed/hitsRed or pcBlue/hitsBlue), instead of one
