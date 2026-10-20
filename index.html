@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v421'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v422'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4470,12 +4470,19 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
     kidBatHandoffPos.copy(batG.position); // last frame's hand-tracked position, before it gets overwritten by hp just below
     kidBatHandoffPosT=0;kidBatHandoffArmed=false; // armed=false: frozen, waiting for the body's own catch-up window to actually end
    }
-   const __catchupSEq=Math.min(kidBatDynFlatS*0.15,0.06); // same formula as updateKidBatter()'s own __catchupS, kept in lockstep via the shared kidBatDynFlatS
-   if(kidBatHandoffPos!==null&&!kidBatHandoffArmed&&sD<=__catchupSEq){
-    // frozen: the body itself hasn't visibly started swinging yet (still inside its own catch-up window), so neither the bat's position,
-    // yaw, NOR elevation move from the measured handoff pose yet. Elevation (batT.rotation.z) is always exactly 0 while hand-tracked (the
-    // tilt is baked directly into the hand bone's own quaternion instead, see batT.rotation.set(0,0,0) in the hand-tracking branch above)
-    // -- so 0 IS this pose's elevation, matching position/yaw's own "hold exactly what hand-tracking last showed" rule.
+   // v422: freeze gate switched from an sD-based approximation (sD<=__catchupSEq) to the thing it was actually trying to approximate -- the
+   // skeleton's own clip time (kidBatAction.time) genuinely moving forward from wherever the load left off (kidBatSwingStartFrame, captured
+   // at this same transition). sD can already be well past any sD-based threshold on a mirrored swing's very first rendered frame (network
+   // delivery took real time before this client ever got to render it at all), ending the freeze before the body had moved even one real
+   // animation frame -- live repro confirmed: body/hands completely static across two frames, bat already popped between them. Holding until
+   // the clip has actually advanced by one real frame (1/30, this clip's own frame rate) ties the bat's freeze directly to "has the body's
+   // own animation genuinely started moving", not a proxy for it.
+   if(kidBatHandoffPos!==null&&!kidBatHandoffArmed&&(kidBatAction.time-kidBatSwingStartFrame)<1/30){
+    // frozen: the body itself hasn't visibly started swinging yet (its own clip time hasn't moved a full frame from where load left off),
+    // so neither the bat's position, yaw, NOR elevation move from the measured handoff pose yet. Elevation (batT.rotation.z) is always
+    // exactly 0 while hand-tracked (the tilt is baked directly into the hand bone's own quaternion instead, see batT.rotation.set(0,0,0) in
+    // the hand-tracking branch above) -- so 0 IS this pose's elevation, matching position/yaw's own "hold exactly what hand-tracking last
+    // showed" rule.
     batG.position.copy(kidBatHandoffPos);
     if(kidBatHandoffYaw!==null)batG.rotation.set(0,Math.PI/2-kidBatHandoffYaw,0);
     batT.rotation.z=0;
