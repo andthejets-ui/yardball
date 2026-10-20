@@ -475,7 +475,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v419'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v420'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4479,19 +4479,21 @@ function tick(){pollPad();pollHumanPitch();pollAiBatter();pollSideSelectPitchTog
    }else{
     if(kidBatHandoffPos!==null&&!kidBatHandoffArmed){kidBatHandoffArmed=true;kidBatHandoffPosT=0} // just crossed out of the catch-up window -- start both the position and yaw blends fresh, from the same captured point/angle
     batG.position.copy(hp);
-    if(kidBatHandoffPosT<0.08){ // fixed ~0.08s real-time window, same length as kidBatSnapT's blend above, deliberately NOT gated on sD (see comment above)
-     const __bw2=1-kidBatHandoffPosT/0.08;
-     batG.position.lerp(kidBatHandoffPos,__bw2);
-     kidBatHandoffPosT+=dt;
-    }
     // explicit x/y/z (not just .y=) -- batG.quaternion was driven directly by the hand bone a moment ago and can carry non-zero x/z
     // Euler components; setting only .y leaves those stale components mixed in, which can roll the bat edge-on to the camera (looks
     // like the bat vanishes). This clears it back to a clean yaw-only rotation every time, matching the ghost bat's own convention.
-    if(kidBatHandoffYaw!==null&&sD<KIDBAT_YAW_BLEND_S){
-     const __bp=sD/KIDBAT_YAW_BLEND_S,__be=1-(1-__bp)*(1-__bp); // ease-out, always moving from the measured angle toward visA -- never the other way
-     batG.rotation.set(0,Math.PI/2-(kidBatHandoffYaw+(visA-kidBatHandoffYaw)*__be),0);
-    }else{
-     batG.rotation.set(0,Math.PI/2-visA,0);
+    batG.rotation.set(0,Math.PI/2-visA,0); // settle to the fully-driven pose first; eased away from below if still inside the blend window
+    if(kidBatHandoffPosT<0.08){ // fixed ~0.08s real-time window, same length as kidBatSnapT's blend above, deliberately NOT gated on sD
+     // v420: yaw now shares this exact same dt-based weight/window as position, instead of its own separate sD-gated blend. The old
+     // sD-gated version (bp=sD/KIDBAT_YAW_BLEND_S) measured its OWN progress straight off sD, which is already partway through its window
+     // the instant we leave the freeze above (frozen exits once sD>__catchupSEq, and KIDBAT_YAW_BLEND_S=0.1 > __catchupSEq's max of 0.06)
+     // -- so the very first armed frame jumped straight to ~60% blended toward visA instead of starting at 0%, a visible rotation pop
+     // around the bat's own grip point even though position (already on its own dt timer) stayed smooth. Sharing __bw2 fixes both the
+     // same way: 1 right as armed (exactly matches the frozen yaw, no pop), easing to 0 (pure visA) over the same real-time window.
+     const __bw2=1-kidBatHandoffPosT/0.08;
+     batG.position.lerp(kidBatHandoffPos,__bw2);
+     if(kidBatHandoffYaw!==null)batG.rotation.y=Math.PI/2-(visA+(kidBatHandoffYaw-visA)*__bw2);
+     kidBatHandoffPosT+=dt;
     }
    }
    batT.rotation.z=visEl;
