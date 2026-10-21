@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v436'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v437'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4280,8 +4280,17 @@ function endHit(){
   else if(!crossed.air&&crossed.high){m='GROUND RULE DOUBLE'}           // bounced over the fence
   else if(crossed.air)m='DOUBLE (off the wall)';                       // hit the boards on the fly
   else m='DOUBLE';                                                     // landed, then rolled / bounced into the fence
-  if(advBase){const note=describeRunsOnHit(hitBases(m),base1,base2,base3);if(note)advN=note.charAt(0).toUpperCase()+note.slice(1)}
-  advanceRunners(hitBases(m));hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;S=B=0;
+  const n=hitBases(m); // captured BEFORE any relabeling below, so advanceRunners() below always gets the real base count even once m is renamed
+  if(advBase){
+   if(m==='HOME RUN!'){
+    // v437: a grand slam's headline already says everything a run-scoring note would -- relabel instead of adding "all 3 runners score" under
+    // a result that's already named for it. Fewer than all three aboard gets a short "N-run homer"/"Solo shot" line instead -- same idea (how
+    // many runs, right under the result) without a describeRunsOnHit() note just repeating what "homer" already implies.
+    if(base1&&base2&&base3)m='GRAND SLAM!';
+    else{const aboard=(base1?1:0)+(base2?1:0)+(base3?1:0);advN=aboard===0?'Solo shot':aboard===1?'2-run homer':'3-run homer'}
+   }else{const note=describeRunsOnHit(n,base1,base2,base3);if(note)advN=note.charAt(0).toUpperCase()+note.slice(1)}
+  }
+  advanceRunners(n);hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;S=B=0;
   if(checkWalkoff(preRed,preBlue)){walkoffPending=true;m='WALKOFF '+m}}
  else{
   if(wallNote){ // ofTest() only ever runs on a ball that's ALREADY touched the ground (see its own doc comment -- "a low ball", after it bounced short
