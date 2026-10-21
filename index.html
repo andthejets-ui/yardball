@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v448'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v449'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4476,7 +4476,11 @@ function endHit(){
       // forward-only landing-point readout used for the shallow/atHim call above), not o2.dist, the actual straight-line (so, forward AND
       // lateral both) distance this recheck itself used, or how much spare margin it had/needed. A user asking "how far to the side was this"
       // had no way to answer it from what was shown. Surfaced here the same way fieldNote() already breaks down an infield out.
-      const spareTxt=o2.mg<=0?`${(-o2.mg).toFixed(1)} m of reach to spare (needed ${comfortReq.toFixed(1)} m to call it comfortable)`:`came up ${o2.mg.toFixed(1)} m short even to reach it at all`;
+      // v449: a ball that went OVER his head still runs this whole check (ofTest() has no idea the air-catch attempt already failed well behind
+      // him), so its raw recovery-margin math can come back looking very comfortable (big spare reach on the ROLL) even though `over` is what's
+      // actually forcing comfortable=false -- the note used to print that spare-reach number right next to "didn't have time to prevent it",
+      // which reads as a flat contradiction. Give the over-the-head case its own, honest wording instead of the generic spare/short framing.
+      const spareTxt=over?`it already got over his head in the air before he could give chase`:o2.mg<=0?`${(-o2.mg).toFixed(1)} m of reach to spare (needed ${comfortReq.toFixed(1)} m to call it comfortable)`:`came up ${o2.mg.toFixed(1)} m short even to reach it at all`;
       if(comfortable)wallNote=`${o2.f.n} ran it down ${o2.dist.toFixed(1)} m and kept it to a single (${spareTxt})`;
       else if(m!==was)wallNote=`${o2.f.n} ran it down ${o2.dist.toFixed(1)} m and held him to a ${m.toLowerCase()} instead of a ${was.toLowerCase()} (${spareTxt})`;
       else wallNote=`${o2.f.n} ran it down ${o2.dist.toFixed(1)} m but didn't have time to prevent the ${m.toLowerCase()} (${spareTxt})`;
