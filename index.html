@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v450'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v451'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4308,7 +4308,14 @@ function airCatch(line){ // line = a line drive: fielders get no run credit, it 
  return best}
 const isFair=p=>p.z<0&&Math.abs(p.x)<-p.z; // inside the two foul lines (45 deg either side of the pitcher)
 function endHit(){
- let m,col='#fff',fd=null,fnote='',outFd=null,advN='',singleFielder=null; // v448: which outfielder the ball was hit toward on a single, for resolveAdvancedSingle()'s new "runner stopped up at 2nd with the ball in X" noteconst d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
+ // v451 HOTFIX: v448's own comment (naming singleFielder) got appended directly onto this line with no line break before the ORIGINAL
+ // `const d=...,k=...` declaration that used to follow it -- since `//` runs to end of line, that swallowed the entire `const d=first.d,
+ // y0=...,k=...` statement into the comment text, so it was never actually executed. d/y0/k were silently undeclared for every hit from v448
+ // onward, throwing "k is not defined" (or d/y0) the instant endHit() referenced any of them -- which is almost immediately, on every single
+ // play. User caught this live: a result silently failed and the game auto-advanced to the next pitch with no result shown at all. Restored
+ // the declaration on its own line, comment moved above it where it can't swallow anything.
+ let m,col='#fff',fd=null,fnote='',outFd=null,advN='',singleFielder=null; // which outfielder the ball was hit toward on a single, for resolveAdvancedSingle()'s "runner stopped up at 2nd with the ball in X" note
+ const d=first.d,y0=H.y0===undefined?.6:H.y0,k=first.peak-y0<.35?'ground ball':(H.launch>=22||first.peak>=6)?'fly ball':'line drive'; // ground ball = never rises more than ~35 cm above where it was hit. fly ball thresholds loosened twice now: 28deg/8m -> 25deg/7m (a 25deg/7.6m/2.9s-hang ball was reading as a line drive despite looking like a clear fly ball) -> 22deg/6m (a slow 46mph-exit changeup pop-up, 24deg/6.4m/2.7s hang -- same lazy, towering shape as the previous fix, just a notch smaller/slower -- was still falling 1deg/0.6m short of the old cutoff and reading as a line drive again). Every confirmed real line drive seen so far tops out well under 4m peak, so there's still plenty of room below 6m/22deg before this risks reclassifying an actual screamer.
  if(fairDec===null)fairDec=isFair(first.p);
  let wall=crossed,wallNote='';
  // A ball only belongs in the immediate HOME RUN / DOUBLE-off-the-wall branch below if it reached the fence WHILE STILL AIRBORNE (crossed.air) -- that
