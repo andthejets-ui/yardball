@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- Copyright (c) 2026 Ben Ross. All rights reserved.
+     Unauthorized copying, redistribution, or use of this file or any portion of it, in source or compiled form, is prohibited without the express written permission of the copyright holder. -->
 <html><head><meta charset="utf-8"><title>Yard Ball</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <!-- lets iOS Safari run this edge-to-edge (no browser chrome) if the player uses Share -> Add to Home Screen on the artifact's own link, separate
@@ -466,6 +468,8 @@ window.YB_FB={
 window.dispatchEvent(new Event('yb-fb-ready'));
 </script>
 <script>
+// Copyright (c) 2026 Ben Ross. All rights reserved. Unauthorized copying, redistribution, or use of this code, in whole or in part, is prohibited
+// without the express written permission of the copyright holder.
 const $=id=>document.getElementById(id), D2R=Math.PI/180;
 // v308: several single-letter/debug keyboard shortcuts (camera cycle, the dev-only check-swing bat scrubber, pause-menu-visibility toggle, the ball-
 // offset nudger) listen globally with no awareness of focus, so typing a join code with letters like C/F/H into the online "CODE" field was also
@@ -479,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v452'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v453'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
