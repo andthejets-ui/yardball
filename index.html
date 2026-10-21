@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v446'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v447'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4253,8 +4253,13 @@ function fieldNote(fd){if(fd){
  const l=FLD.filter(f=>f.late>0).sort((x,y)=>x.late-y.late)[0];if(l)return `${l.n} got there ${l.late.toFixed(2)} s too late to get the batter`;
  let nf=null;for(const f of FLD)if(!nf||f.margin<nf.margin)nf=f;return nf&&nf.margin<1e8?`nearest fielder ${nf.n} missed it by ${Math.max(0,nf.margin).toFixed(1)} m`:''}
 // Catching a ball that is still in the air when it comes down: reach = glove + how far he can run in the ball's hang time (slower going back)
-const OFP={vF:4.8,react:.35,rg:1.1,from:1.4,span:1.2,softFrom:25,softSpan:6,backSlow:.6,turn:.5}; // going back: slower (backSlow) and he loses `turn` seconds turning to find the ball // softFrom/softSpan (m/s off the bat): a ball hit softer than ~56 mph is easy to read, so fielders get more and more run credit, full at about 42 mph
- // run credit is ~0 below 1.4 s of hang time and only reaches full around 2.6 s (a low flare gets almost none)
+const OFP={vF:4.8,react:.35,rg:1.1,from:2.0,span:1.2,softFrom:25,softSpan:6,backSlow:.6,turn:.5}; // going back: slower (backSlow) and he loses `turn` seconds turning to find the ball // softFrom/softSpan (m/s off the bat): a ball hit softer than ~56 mph is easy to read, so fielders get more and more run credit, full at about 42 mph
+ // v447: `from` bumped 1.4->2.0 -- two separate reported CF line-outs (1.9s/41mph and 2.0s/47mph, both landing in the GAP, well outside his drawn
+ // circle) both felt like legitimate hits to the user, with the explicit calibration: "extended hang time should help it get caught for sure, but
+ // at 2 seconds that's very quick -- it needs to be more right at their circle." 1.4s was letting a 2-second liner already draw real extra credit
+ // (ramp~25% at 2.0s under the old curve, topped up further by `soft` below). Pushed the whole curve out so a ~2.0s liner gets effectively nothing
+ // beyond his flat glove radius, and real extra credit only opens up approaching 3+ seconds -- a genuine rainbow, not just "decent hang time."
+ // run credit is ~0 below 2.0 s of hang time and only reaches full around 3.2 s (anything shorter than that stays close to the drawn circle)
 const OF_TIE=1; // metres -- on a close call between two OUTFIELDERS, CF has priority and calls off his corner men (doesn't override an infielder's play)
 const OF_COMFORT=1.5; // metres of reach to SPARE (i.e. -mg) on an already-grounded ball, above which a fielder "ran it down" comfortably rather than barely scrambling to it -- see endHit()'s single/double/triple capping
 function ofTest(line){ // can an outfielder get to a low ball before it reaches the fence?
@@ -4283,13 +4288,13 @@ function ofTest(line){ // can an outfielder get to a low ball before it reaches 
 function airCatch(line){ // line = a line drive: fielders get no run credit, it has to come down right at them
  const vfLBase=line?Math.max(.2,Math.min(1,1-(H.ev-18)/8)):1; // a line drive's flat glove-only reach shrinks fast above ~40 mph — full reach only on a genuinely soft one, next to none on a real screamer
  const byF=new Map();
- for(const f of [...FLD,...OFD]){const dist=Math.hypot(first.p.x-f.x,first.p.z-f.z),stDist=Math.hypot(f.x,f.z),back=first.d>stDist,backDeep=back&&(first.d-stDist)>4,ramp=Math.pow(Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)),2),soft=Math.max(0,Math.min(1,(OFP.softFrom-H.ev)/OFP.softSpan))*Math.max(0,Math.min(1,(first.t-1.2)/.6)),
+ for(const f of [...FLD,...OFD]){const dist=Math.hypot(first.p.x-f.x,first.p.z-f.z),stDist=Math.hypot(f.x,f.z),back=first.d>stDist,backDeep=back&&(first.d-stDist)>4,ramp=Math.pow(Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)),2),soft=Math.max(0,Math.min(1,(OFP.softFrom-H.ev)/OFP.softSpan))*Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)), // v447: soft's own time-gate used to be a separately hand-tuned 1.2-1.8s window, independent of `ramp`'s 1.4-2.6s one -- the two drifting apart is exactly how a ~2s liner could still get real credit from `soft` even once `ramp` alone was pushed out. Unified onto the same OFP.from/span curve so there's one dial, not two that can disagree.
   vfLEase=backDeep?0:Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)),vfL=line?Math.min(1,vfLBase+(1-vfLBase)*vfLEase):1, // v276: vfLBase used to apply flat, no matter how long the ball hung -- a liner with real hang time is as trackable as a fly ball once a fielder's had time to get a read on it, same reasoning as the ramp/soft fix below. But that only holds for a ball he can run UNDER (in front of him, to a side, or just a step or two back) -- a genuinely deep retreat (`backDeep`: more than 4m past his own station, i.e. actually heading for the warning track/wall) keeps the full flat discount regardless of hang time, since extra air time doesn't make a turn-and-run toward the fence any easier the way it does a play with room to drift forward or across. Note `back` (any backward adjustment, even a small one) still slows his run speed/adds the turn penalty in R below -- that's unchanged; `backDeep` only gates the NEW hang-time easing on vfL.
   R=(OFP.rg+rampDist(Math.max(0,first.t-OFP.react-(back?OFP.turn:0)),OFP.vF*(back?OFP.backSlow:1),ACCEL_T)*(ramp+(1-ramp)*soft))*vfL,mg=dist-R;byF.set(f,{mg,dist,R})} // v446: accel-ramped, see ACCEL_T. `line` used to hard-zero both ramp and soft regardless of actual hang time -- but a ball classified 'line drive' (by peak/launch angle alone)
- // can still hang a long time off heavy backspin, same as this one (2.4s, right up against the 2.6s this ramp already treats as "plenty of
- // time"). The ramp formula already scales run credit off first.t on its own -- a genuinely fast liner (well under OFP.from=1.4s) still gets
- // ~0 credit automatically, so removing the `line` gate only changes anything for the slow-developing ones, which is exactly the case that was
- // wrong: a ball landing well within reach but still getting denied a catch purely because of how it was classified, not how long it hung.
+ // can still hang a long time off heavy backspin, same as this one (2.4s, right up against the (pre-v447) 2.6s this ramp already treats as
+ // "plenty of time"). The ramp formula already scales run credit off first.t on its own -- a genuinely fast liner (well under OFP.from, now 2.0s)
+ // still gets ~0 credit automatically, so removing the `line` gate only changes anything for the slow-developing ones, which is exactly the case
+ // that was wrong: a ball landing well within reach but still getting denied a catch purely because of how it was classified, not how long it hung.
  let best=null;for(const [f,v] of byF)if(v.mg<=0&&(!best||v.mg<best.mg))best={f,...v};
  if(!best)return null;
  const cf=OFD[1],cfV=byF.get(cf); // CF has priority over a corner outfielder on a close call -- doesn't apply when the best play belongs to an infielder
