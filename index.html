@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v445'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v446'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4139,6 +4139,18 @@ function endNoContact(){
  $('sub').textContent+=continueHintSuffix();
  updSB()}
 // ---- infield: bases and fielders (positions in metres from home plate; x+ = 1B side, z- = toward the pitcher) ----
+const ACCEL_T=.35; // v446: every run-credit formula in this file (infield AND outfield) used to credit a fielder's full top speed (vF) starting the
+// INSTANT his reaction delay ended -- flat speed*time, no ramp-up. Real kids (anyone, really) don't hit top sprint speed in zero seconds off a
+// standing start; they accelerate into it over the first several steps. User's own read, after a long run of "he got 3+ metres in 0.7 seconds,
+// there's no way" reports: "the modeling of the kids speed is where we must have it wrong" -- and the math backs it up. Most of tonight's infield
+// plays are fielded well under 1 second after contact, meaning almost the ENTIRE run-credit window was being charged at full speed under the old
+// formula, when a chunk of that time should have gone to still-accelerating, below-top-speed steps. rampDist() below replaces the flat vF*time
+// with a simple constant-acceleration ramp: speed climbs linearly from 0 to vF over ACCEL_T seconds (so average speed during the ramp is half of
+// vF), then holds flat at vF after that. 0.35s is a first-pass guess for how long a young player takes to reach a real sprint -- not yet tuned to
+// a specific reported case the way reachBuf was, just a physically honest shape where there was none before. Longer plays (outfield, anything
+// that takes a couple seconds) are barely affected, since the ramp's shortfall is a fixed, small head start that gets diluted as te grows; short,
+// sub-one-second infield plays -- exactly the ones generating tonight's reports -- are the ones this actually changes.
+function rampDist(te,topSpeed,accelT){if(te<=0)return 0;if(te<=accelT)return .5*(topSpeed/accelT)*te*te;return .5*topSpeed*accelT+topSpeed*(te-accelT)}
 const FP={vF:5.5,react:.25,vSoft:18,vHard:34,tBat:1.9,rel:.45,vThrow:24,infield:16,reachY:1.5,reachBuf:.17}; // v442: bumped from .09 -- 8 reported SS/2B plays (2.6-4.0m off station, exit speed and distance both overlapping heavily between the two groups) split cleanly on margin alone: every one the user called a correct out had printed a margin of 0.09m or more, every one called a should-be-hit had 0.06m or less. A flat +.08 puts the dividing line right between those two clusters (0.09 -> ~0.01 stays an out, 0.06 -> ~-0.02 becomes a hit) without needing any distance- or position-based scaling. // reachY: highest an infielder can glove a line drive standing flat-footed, no leap/jump/reach credited -- was 2.0m (glove-up-overhead standing reach), brought down to 1.5m (roughly chin/upper-chest height) since a full overhead stretch was reading as too generous; a ball at the face or chest is still gloveable, nothing above that is.
 // reachBuf: a batch of user-reviewed ground-ball plays split cleanly into two groups -- flat/level grounders (launch angle roughly -4 deg to +9 deg) at
 // 54-63mph that were converted by margins of only 1-5cm (coin-flip "smoked it right at somebody" plays that should sometimes get through), versus
@@ -4184,7 +4196,7 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
    // entirely, since even a shot that lands right at his depth still leaves SOME reaction window.
    const stationDepth=Math.hypot(f.x,f.z),runway=Math.max(0,stationDepth-first.d),runwayEase=air?1:Math.max(.4,Math.min(1,runway/5));
    const evNow=air?H.ev:q[3],dist=__distToF,vf=Math.max(.3,Math.min(1,1-(evNow-FP.vSoft)/(FP.vHard-FP.vSoft))),
-    run=((!air&&q[1]<=1.3&&!movingAway)?FP.vF*Math.max(0,q[4]-FP.react):0)*vf*vf*runwayEase; // v443: run credit used to lose reach at the same flat rate as glove radius (one power of vf) -- but the user's own read was that a "decently hard" hit (not even an extreme screamer) should leave an infielder with barely more than his flat-footed glove radius side to side, with real extra range reserved for genuinely slow choppers. Squaring vf here (vf*vf) keeps full run credit on a soft ball (vf=1) but cuts it much faster as exit speed climbs -- a moderate-hard ball loses roughly half its run credit where it used to lose barely a quarter, and a real screamer (vf near its .3 floor) is left with almost none, so his total reach collapses toward just r0 (~1m) rather than the 2+m it could reach before.
+    run=((!air&&q[1]<=1.3&&!movingAway)?rampDist(Math.max(0,q[4]-FP.react),FP.vF,ACCEL_T):0)*vf*vf*runwayEase; // v446: flat vF*time swapped for the accel-ramped distance -- see ACCEL_T's own comment // v443: run credit used to lose reach at the same flat rate as glove radius (one power of vf) -- but the user's own read was that a "decently hard" hit (not even an extreme screamer) should leave an infielder with barely more than his flat-footed glove radius side to side, with real extra range reserved for genuinely slow choppers. Squaring vf here (vf*vf) keeps full run credit on a soft ball (vf=1) but cuts it much faster as exit speed climbs -- a moderate-hard ball loses roughly half its run credit where it used to lose barely a quarter, and a real screamer (vf near its .3 floor) is left with almost none, so his total reach collapses toward just r0 (~1m) rather than the 2+m it could reach before.
    // 3B specifically: a ball right at him, or a slow one he has time to charge/cut across (toward his forehand side, going FORWARD to cut it off and help SS), should be a near-automatic out. A HARD-hit ball into the 5-6 hole is different -- a real 3B rarely ranges BACK into it since that takes him out of position for the throw to 1B. holePenalty only fires for him, only on that side (q[0]>f.x, i.e. toward SS not toward the line), and scales with how hard it's hit (0 on a soft one) so it doesn't touch the balls he should still make.
    // v278: bumped .35->.45 -- a run of hard-hit 5-6-hole plays kept coming back as outs, including one at an exact 0.00m margin.
    // v283: even at .45, three more hard-hit hole plays in a row (one a comfortable 12cm margin out) still read as "should be a single" -- but the user's
@@ -4262,7 +4274,7 @@ function ofTest(line){ // can an outfielder get to a low ball before it reaches 
  // drawn on the field, f.r0+.6) is an easy stop in stride regardless of how much EXTRA margin the run-credit math happens to show. See endHit()'s
  // `stationClose` use of this, below -- driven by a case where the user watched the ball visibly roll through the middle of the drawn circle and it
  // still came back as "ran it down but didn't have time," which didn't square with what was on screen.
- for(const f of OFD){let bm=1e9,bd=1e9;for(const q of trk){if(q[1]>1.3)continue;const dist=Math.hypot(q[0]-f.x,q[2]-f.z),vf=Math.max(.3,Math.min(1,1-(H.ev-FP.vSoft)/(FP.vHard-FP.vSoft))),run=OFP.vF*Math.max(0,q[4]-OFP.react)*vf,R=f.r0*vf+run,mg=dist-R;if(mg<bm){bm=mg;bd=dist}}byF.set(f,{mg:bm,dist:bd})}
+ for(const f of OFD){let bm=1e9,bd=1e9;for(const q of trk){if(q[1]>1.3)continue;const dist=Math.hypot(q[0]-f.x,q[2]-f.z),vf=Math.max(.3,Math.min(1,1-(H.ev-FP.vSoft)/(FP.vHard-FP.vSoft))),run=rampDist(Math.max(0,q[4]-OFP.react),OFP.vF,ACCEL_T)*vf,R=f.r0*vf+run,mg=dist-R;if(mg<bm){bm=mg;bd=dist}}byF.set(f,{mg:bm,dist:bd})} // v446: accel-ramped, see ACCEL_T
  let best=null;for(const f of OFD){const v=byF.get(f);if(v.mg<=0&&(!best||v.mg<best.mg))best={f,...v}}
  if(!best)return null;
  const cf=OFD[1],cfV=byF.get(cf); // OFD=[LF,CF,RF]
@@ -4273,7 +4285,7 @@ function airCatch(line){ // line = a line drive: fielders get no run credit, it 
  const byF=new Map();
  for(const f of [...FLD,...OFD]){const dist=Math.hypot(first.p.x-f.x,first.p.z-f.z),stDist=Math.hypot(f.x,f.z),back=first.d>stDist,backDeep=back&&(first.d-stDist)>4,ramp=Math.pow(Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)),2),soft=Math.max(0,Math.min(1,(OFP.softFrom-H.ev)/OFP.softSpan))*Math.max(0,Math.min(1,(first.t-1.2)/.6)),
   vfLEase=backDeep?0:Math.max(0,Math.min(1,(first.t-OFP.from)/OFP.span)),vfL=line?Math.min(1,vfLBase+(1-vfLBase)*vfLEase):1, // v276: vfLBase used to apply flat, no matter how long the ball hung -- a liner with real hang time is as trackable as a fly ball once a fielder's had time to get a read on it, same reasoning as the ramp/soft fix below. But that only holds for a ball he can run UNDER (in front of him, to a side, or just a step or two back) -- a genuinely deep retreat (`backDeep`: more than 4m past his own station, i.e. actually heading for the warning track/wall) keeps the full flat discount regardless of hang time, since extra air time doesn't make a turn-and-run toward the fence any easier the way it does a play with room to drift forward or across. Note `back` (any backward adjustment, even a small one) still slows his run speed/adds the turn penalty in R below -- that's unchanged; `backDeep` only gates the NEW hang-time easing on vfL.
-  R=(OFP.rg+OFP.vF*(back?OFP.backSlow:1)*Math.max(0,first.t-OFP.react-(back?OFP.turn:0))*(ramp+(1-ramp)*soft))*vfL,mg=dist-R;byF.set(f,{mg,dist,R})} // `line` used to hard-zero both ramp and soft regardless of actual hang time -- but a ball classified 'line drive' (by peak/launch angle alone)
+  R=(OFP.rg+rampDist(Math.max(0,first.t-OFP.react-(back?OFP.turn:0)),OFP.vF*(back?OFP.backSlow:1),ACCEL_T)*(ramp+(1-ramp)*soft))*vfL,mg=dist-R;byF.set(f,{mg,dist,R})} // v446: accel-ramped, see ACCEL_T. `line` used to hard-zero both ramp and soft regardless of actual hang time -- but a ball classified 'line drive' (by peak/launch angle alone)
  // can still hang a long time off heavy backspin, same as this one (2.4s, right up against the 2.6s this ramp already treats as "plenty of
  // time"). The ramp formula already scales run credit off first.t on its own -- a genuinely fast liner (well under OFP.from=1.4s) still gets
  // ~0 credit automatically, so removing the `line` gate only changes anything for the slow-developing ones, which is exactly the case that was
@@ -4397,7 +4409,7 @@ function endHit(){
     // landing clearly in front of him, down to a floor once it's landing at-or-past where he's standing. `over` already excludes atHim entirely on
     // its own at the deep end, so this mainly matters in the middle band right around his own depth.
     const depthEase=Math.max(.35,Math.min(1,(depth-first.d+2.5)/4));
-    const cutoffR=(OFP.rg+OFP.vF*Math.max(0,first.t-OFP.react))*angEase*depthEase,atHim=od<=cutoffR&&!over;
+    const cutoffR=(OFP.rg+rampDist(Math.max(0,first.t-OFP.react),OFP.vF,ACCEL_T))*angEase*depthEase,atHim=od<=cutoffR&&!over; // v446: accel-ramped, see ACCEL_T
     // Triples should be rare -- a real one is a corner play: deep AND either hugging the 3B/LF line as it curves foul-ward (tough recovery
     // in the corner) or down the 1B/RF line (same tough corner recovery, PLUS a much longer relay throw back across the infield to third).
     // A ball that's just deep but more toward the gap/center -- even with nobody modeled as cutting it off -- should still cap at a double;
