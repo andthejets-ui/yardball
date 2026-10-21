@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v438'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v439'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -653,14 +653,18 @@ function advanceWalk(){const r1=base1,r2=base2,r3=base3;let runs=0;if(r1){if(r2)
 // 1st-base runner at 2nd regardless of side (not enough to stretch even to the "long throw" side).
 function resolveAdvancedSingle(sideRight,shallow){
  const r1=base1,r2=base2,r3=base3;let runs=0,note='';
- if(r3){base3=false;runs++;note='runner scores from 3rd'} // v438: used to leave this completely unmentioned whenever he was the ONLY runner ("identical to Basic's own behavior, so never worth a note on its own" -- but Basic shows no note for ANY hit, so that reasoning only ever justified silence by comparison to something equally silent). Advanced narrates every other run already; a single quietly scoring the only runner aboard was the one gap left. r2's own block below overwrites this with a note that already folds his run in when r2 is also present, and r1's block appends onto whichever note survives -- so this is only ever the FINAL note when r3 is the sole runner.
+ // v439: every note below now names WHICH base the runner it's talking about started from ("runner from 3rd scores", not "runner scores
+ // from 3rd") -- once a single play can carry two separate runner notes at once (3rd scoring AND 1st stretching, say), "runner scores from
+ // 3rd, runner stretches to 3rd" reads like the SAME runner doing both (or worse, like the batter stretching to 3rd); naming the origin base
+ // on every clause removes that ambiguity regardless of how many clauses end up chained together.
+ if(r3){base3=false;runs++;note='runner from 3rd scores'} // v438: used to leave this completely unmentioned whenever he was the ONLY runner ("identical to Basic's own behavior, so never worth a note on its own" -- but Basic shows no note for ANY hit, so that reasoning only ever justified silence by comparison to something equally silent). Advanced narrates every other run already; a single quietly scoring the only runner aboard was the one gap left. r2's own block below overwrites this with a note that already folds his run in when r2 is also present, and r1's block appends onto whichever note survives -- so this is only ever the FINAL note when r3 is the sole runner.
  if(r2){
-  if(shallow){base2=false;base3=true;note=r3?'runner scores from 3rd, 2nd advances to 3rd':'runner advances to 3rd'} // same end state Basic already gives a 2nd-base runner on ANY single -- only worth a note so the player sees Advanced deliberately chose this, not that nothing ran. v429: was "checks the runner, holds at 3rd" -- read as if he started the play ON 3rd, when he actually started on 2nd and moved up; "advances to 3rd" describes what actually happened instead
-  else{base2=false;runs++;note=r3?'both runners score':'runner scores from 2nd'} // v436: a runner on 3rd always scores too (see the r3 block above) -- used to go completely unmentioned here, so "Runner scores from 2nd" silently undersold a 2-run single as if only one run came in
+  if(shallow){base2=false;base3=true;note=r3?'runner from 3rd scores, runner from 2nd advances to 3rd':'runner from 2nd advances to 3rd'} // same end state Basic already gives a 2nd-base runner on ANY single -- only worth a note so the player sees Advanced deliberately chose this, not that nothing ran. v429: was "checks the runner, holds at 3rd" -- read as if he started the play ON 3rd, when he actually started on 2nd and moved up; "advances to 3rd" describes what actually happened instead
+  else{base2=false;runs++;note=r3?'both runners score':'runner from 2nd scores'} // v436: a runner on 3rd always scores too (see the r3 block above) -- used to go completely unmentioned here, so "Runner scores from 2nd" silently undersold a 2-run single as if only one run came in
  }
  if(r1){
   base1=false;
-  if(!shallow&&sideRight){base3=true;note=note?note+', runner stretches to 3rd':'runner stretches to 3rd'} // mutually exclusive with r2's shallow->3rd move above (that needs shallow=true, this needs shallow=false), so never a double-claim on base3
+  if(!shallow&&sideRight){base3=true;note=note?note+', runner from 1st stretches to 3rd':'runner from 1st stretches to 3rd'} // mutually exclusive with r2's shallow->3rd move above (that needs shallow=true, this needs shallow=false), so never a double-claim on base3
   else base2=true; // station-to-station to 2nd -- identical to Basic, no note needed
  }
  base1=true;bankRuns(runs);
