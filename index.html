@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v434'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v435'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4155,7 +4155,15 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
    // even though by the time a fielder actually reaches it the topped one is a crawling dribbler and the other one isn't. Grounders now read the ball's
    // own live, already-decaying speed at each sample (q[3], the same physics the game already simulates) instead of the fixed launch number, so a
    // fielder gets his reach back as the ball slows down. Air (line drive, pre-bounce) keeps using H.ev -- it hasn't lost speed to ground friction yet.
-   const evNow=air?H.ev:q[3],dist=__distToF,vf=Math.max(.3,Math.min(1,1-(evNow-FP.vSoft)/(FP.vHard-FP.vSoft))),run=((!air&&q[1]<=1.3&&!movingAway)?FP.vF*Math.max(0,q[4]-FP.react):0)*vf; // vf (the same exit-velocity reach discount already applied to glove radius) now also scales run credit -- a hard-hit ball is tougher to simply run down, not just tougher to glove cleanly when he's already there.
+   // v435: runway -- how much ground the ball had already covered toward THIS fielder's own depth by the time it first touched down. A ball
+   // that first lands well in FRONT of him (shallow) still has the rest of that distance left to bounce/roll before it's near him, giving him
+   // that whole stretch to read it and get across -- full run credit, same as before. One that doesn't touch down until it's already at or
+   // past his own depth (a hard-hit shot that stays low/airborne most of the way) never gave him that early warning -- the elapsed-time math
+   // below was crediting him the same run-down ability either way, purely off the clock, with no regard for how much of that time the ball
+   // actually spent visibly rolling toward him versus still in flight. runway floors at a reduced (not zero) credit rather than cutting it
+   // entirely, since even a shot that lands right at his depth still leaves SOME reaction window.
+   const stationDepth=Math.hypot(f.x,f.z),runway=Math.max(0,stationDepth-first.d),runwayEase=air?1:Math.max(.4,Math.min(1,runway/5));
+   const evNow=air?H.ev:q[3],dist=__distToF,vf=Math.max(.3,Math.min(1,1-(evNow-FP.vSoft)/(FP.vHard-FP.vSoft))),run=((!air&&q[1]<=1.3&&!movingAway)?FP.vF*Math.max(0,q[4]-FP.react):0)*vf*runwayEase; // vf (the same exit-velocity reach discount already applied to glove radius) now also scales run credit -- a hard-hit ball is tougher to simply run down, not just tougher to glove cleanly when he's already there.
    // 3B specifically: a ball right at him, or a slow one he has time to charge/cut across (toward his forehand side, going FORWARD to cut it off and help SS), should be a near-automatic out. A HARD-hit ball into the 5-6 hole is different -- a real 3B rarely ranges BACK into it since that takes him out of position for the throw to 1B. holePenalty only fires for him, only on that side (q[0]>f.x, i.e. toward SS not toward the line), and scales with how hard it's hit (0 on a soft one) so it doesn't touch the balls he should still make.
    // v278: bumped .35->.45 -- a run of hard-hit 5-6-hole plays kept coming back as outs, including one at an exact 0.00m margin.
    // v283: even at .45, three more hard-hit hole plays in a row (one a comfortable 12cm margin out) still read as "should be a single" -- but the user's
