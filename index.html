@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v441'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v442'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4138,7 +4138,7 @@ function endNoContact(){
  $('sub').textContent+=continueHintSuffix();
  updSB()}
 // ---- infield: bases and fielders (positions in metres from home plate; x+ = 1B side, z- = toward the pitcher) ----
-const FP={vF:5.5,react:.25,vSoft:18,vHard:34,tBat:1.9,rel:.45,vThrow:24,infield:16,reachY:1.5,reachBuf:.09}; // reachBuf bumped from .06 -- three real 3B/SS-hole plays in a row (hard-hit, topspin hooking into 3B from the hole) came back as outs by just 1-7cm, consistently in the coin-flip zone this buffer is meant to push toward hits. Not re-tuned to a specific case yet, just a nudge; may need another pass once there's more data. // reachY: highest an infielder can glove a line drive standing flat-footed, no leap/jump/reach credited -- was 2.0m (glove-up-overhead standing reach), brought down to 1.5m (roughly chin/upper-chest height) since a full overhead stretch was reading as too generous; a ball at the face or chest is still gloveable, nothing above that is.
+const FP={vF:5.5,react:.25,vSoft:18,vHard:34,tBat:1.9,rel:.45,vThrow:24,infield:16,reachY:1.5,reachBuf:.17}; // v442: bumped from .09 -- 8 reported SS/2B plays (2.6-4.0m off station, exit speed and distance both overlapping heavily between the two groups) split cleanly on margin alone: every one the user called a correct out had printed a margin of 0.09m or more, every one called a should-be-hit had 0.06m or less. A flat +.08 puts the dividing line right between those two clusters (0.09 -> ~0.01 stays an out, 0.06 -> ~-0.02 becomes a hit) without needing any distance- or position-based scaling. // reachY: highest an infielder can glove a line drive standing flat-footed, no leap/jump/reach credited -- was 2.0m (glove-up-overhead standing reach), brought down to 1.5m (roughly chin/upper-chest height) since a full overhead stretch was reading as too generous; a ball at the face or chest is still gloveable, nothing above that is.
 // reachBuf: a batch of user-reviewed ground-ball plays split cleanly into two groups -- flat/level grounders (launch angle roughly -4 deg to +9 deg) at
 // 54-63mph that were converted by margins of only 1-5cm (coin-flip "smoked it right at somebody" plays that should sometimes get through), versus
 // genuinely topped/weak choppers (-12 to -19 deg launch, or just a slow 28mph roller) converted by a visibly bigger 9-11cm margin that all felt like
@@ -4206,6 +4206,12 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
    // touches it, even though the hard, well-placed shot was the FIRST bounce landing mid-hole, not wherever it happened to end up afterward.
    // Pinned to first.p.x (where it actually first touched down) instead -- a fixed, hit-time property of the ball itself, matching what the
    // player actually saw happen rather than an artifact of which exact point along its bounce path he caught up to it at.
+   // v442: tried switching offStationPenalty's measure from x-only to the full live `dist` (and bumping its coefficient .15->.3) to chase a run
+   // of razor-thin (1-6cm) up-the-middle margins that still read as outs -- but a wider batch of reports (8 plays total, SS/2B, 2.6-4.0m off
+   // station, exit speed varying) showed the SAME margin, not distance or position, was what actually separated "should be a hit" from "correct
+   // out": every play the user called a hit had a margin <=0.06m, every play called a correct out had a margin >=0.09m, with dist/exit-speed
+   // overlapping heavily between the two groups. That's a flat threshold problem, not a position/range one, so the dist-based offStationPenalty
+   // change was reverted back to its original x-only form below, and FP.reachBuf (see its own comment) absorbed the actual fix instead.
    const holeSide=(f.n==='3B'&&first.p.x>f.x)||(f.n==='1B'&&first.p.x<f.x),holeFrac=holeSide?Math.max(0,Math.min(1,Math.abs(first.p.x-f.x)/HOLE_W)):0,holePenalty=holeSide?(.42+.6*holeFrac)*(1-vf):0,
     offStationFrac=Math.min(1,Math.abs(first.p.x-f.x)/HOLE_W),offStationPenalty=.15*offStationFrac*(1-vf);
    const R=Math.max(0,f.r0*vf+run-FP.reachBuf-holePenalty-offStationPenalty),mg=dist-R; // reachBuf trims a flat sliver off reach so razor-thin (1-5cm) plays swing to hits -- see FP.reachBuf comment above
@@ -4412,7 +4418,13 @@ function endHit(){
      const o2=ofTest(k==='line drive');
      if(o2){
       const stationClose=o2.dist<=o2.f.r0+.6; // v282: same radius as the reach circle drawn on the field for this fielder -- if the ball's closest approach actually passed through that circle, it's an easy stop in stride no matter what the run-credit margin math says, since that math is for "did he have to chase it," not "was it basically already at his feet."
-      const comfortable=(o2.mg<=-OF_COMFORT||stationClose)&&!over,was=m; // `over` (already computed above -- landed well past his set depth) matters here too: ofTest() only looks at whether he can EVENTUALLY reach wherever the ball ends up, with no limit on how long that takes, so a ball that cleared his head by several metres could still read as "comfortable" once it finally rolled to a stop somewhere he can jog to -- even though the runner already took the extra base(s) long before that. A ball that got over his head is never the full comfortable/single outcome, no matter how much spare reach he eventually shows on the roll.
+      // v442: OF_COMFORT used to be the same flat 1.5m spare-reach requirement no matter how hard the ball was hit -- but a ball hit hard enough
+      // to still be carrying real pace into the fence needs MORE room to spare before "he could have gotten there in time" actually means a
+      // comfortable, in-stride stop rather than a running math margin that doesn't account for how fast the ball itself is moving. vfHere mirrors
+      // the same exit-velo discount fieldTest()/ofTest()'s own run credit already applies; a max-hard hit needs up to a full extra metre of
+      // margin here, a soft one is unchanged. stationClose (genuinely right at his feet) is untouched -- that one's about position, not pace.
+      const vfHere=Math.max(.3,Math.min(1,1-(H.ev-FP.vSoft)/(FP.vHard-FP.vSoft))),comfortReq=OF_COMFORT+(1-vfHere);
+      const comfortable=(o2.mg<=-comfortReq||stationClose)&&!over,was=m; // `over` (already computed above -- landed well past his set depth) matters here too: ofTest() only looks at whether he can EVENTUALLY reach wherever the ball ends up, with no limit on how long that takes, so a ball that cleared his head by several metres could still read as "comfortable" once it finally rolled to a stop somewhere he can jog to -- even though the runner already took the extra base(s) long before that. A ball that got over his head is never the full comfortable/single outcome, no matter how much spare reach he eventually shows on the roll.
       // Bug: this used to fall to 'SINGLE' for ANY non-comfortable recovery, not just a triple -- so a ball that was already just a DOUBLE (not a
       // triple) got collapsed all the way down to a single the moment a fielder ran it down at all, comfortably or not. The comment above always said
       // a bare scramble only takes away ONE level (triple -> double) and should never erase the whole gap -- the code just never actually did that
