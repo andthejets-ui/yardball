@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v453'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v454'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4178,6 +4178,39 @@ const FP={vF:5.5,react:.25,vSoft:18,vHard:34,tBat:1.9,rel:.45,vThrow:24,infield:
 // of the trajectory), so expect another round once there's more real data on where the line should sit.
 // infield: a grounder that never gets past the infielders' depth (rolls less than this many metres) is always an out - someone charges it.
 // A fielder makes the play if the ball passes inside his reach: glove radius (shrinks for hard-hit balls) + distance he can run since the hit
+// v454: the user's own proposed reach model, as a second opinion alongside the Euclidean dist-R scan every fielding check below already runs.
+// That scan asks "how close is the ball to me at each sampled instant" and keeps whichever instant minimizes dist-R -- it works, but it never
+// explicitly separates "when does the ball get level with my own depth" from "how far laterally do I have to move by then," and outfield reach
+// in particular still prices every point using the ball's FIXED exit velocity (H.ev), with no notion that a ball which already touched down and
+// bled off real speed to friction before reaching a fielder's depth arrives there slower -- and so easier to field -- than one with the same
+// exit velocity that stayed hot/airborne longer first. This isolates exactly that: find where the ball's trajectory crosses the line running
+// straight out through the fielder's own station (perpendicular to his bearing from home, at his own depth), interpolate the exact instant and
+// the LATERAL offset at that instant, and price reach using the ball's actual, already-decayed speed right there, not its launch speed. Returns
+// null if the ball's path never actually reaches that depth (a ball that dies in front of him was never going to cross it -- the normal scan
+// already covers "stopped well short"). Additive everywhere it's used: callers take whichever of the two margins is more favorable, so this can
+// only ever help a fielder who reads badly off the plain distance scan on a ball that's visibly slowed by the time it's level with him, never
+// hurt one who was already getting full credit there.
+function crossLineMargin(f,pts,vFConst,accelT,reactT){
+ const stationDepth=Math.hypot(f.x,f.z);if(stationDepth<1e-6)return null;
+ const ux=f.x/stationDepth,uz=f.z/stationDepth,px=-uz,pz=ux; // ux/uz: unit vector from home through the fielder's own station (his bearing). px/pz: that bearing rotated 90 degrees -- the LATERAL direction, perpendicular to it.
+ let prev=null;
+ for(const q of pts){
+  const fwd=q[0]*ux+q[2]*uz; // how far along the fielder's own bearing this point is -- the ball's "depth" measured on his line, not home's.
+  if(prev){
+   const pfwd=prev[0]*ux+prev[2]*uz;
+   if(pfwd<stationDepth&&fwd>=stationDepth){ // the ball's depth-on-his-line just crossed his own station depth between these two samples
+    const frac=Math.max(0,Math.min(1,(stationDepth-pfwd)/((fwd-pfwd)||1e-9)));
+    const t=prev[4]+(q[4]-prev[4])*frac,y=prev[1]+(q[1]-prev[1])*frac;
+    const xAt=prev[0]+(q[0]-prev[0])*frac,zAt=prev[2]+(q[2]-prev[2])*frac,lat=xAt*px+zAt*pz; // lat: signed lateral offset from his bearing line at the crossing instant -- 0 means it crosses right through his own spot
+    const spd=prev[3]+(q[3]-prev[3])*frac,vf=Math.max(.3,Math.min(1,1-(spd-FP.vSoft)/(FP.vHard-FP.vSoft))); // the ball's own ACTUAL (already-decayed) speed at this instant, not H.ev -- this is the whole point
+    const reach=f.r0*vf+rampDist(Math.max(0,t-reactT),vFConst,accelT)*vf;
+    return {mg:Math.abs(lat)-reach,t,y,v:spd,dist:Math.abs(lat),hx:xAt};
+   }
+  }
+  prev=q;
+ }
+ return null;
+}
 function fieldTest(air,pts){let best=null; // air = line drive: caught only if it passes right at the glove before it bounces. pts: optional subset of trk to search instead of the whole thing (used to re-run the normal, run-credit grounder check over just the AFTER-it-bounced portion of a line drive's track -- see the call site in endHit())
  for(const f of FLD){let margin=1e9,hit=null,mv=0,prevDist=null; // prevDist: tracks whether the ball is closing on THIS fielder or curving away from him, point to point (see movingAway below)
   // Deadline grace: this whole sim gives the defense credit it hasn't really earned on anything that needs a dive, an off-balance/jump throw, or
@@ -4256,6 +4289,13 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
    const R=lineOverride?0:Math.max(0,f.r0*vf+run-FP.reachBuf-holePenalty-linePenalty-offStationPenalty),mg=dist-R; // reachBuf trims a flat sliver off reach so razor-thin (1-5cm) plays swing to hits -- see FP.reachBuf comment above
    if(mg<margin){margin=mg;mv=q[3]}
    if(mg<=0&&!(f.maxEv&&H.ev>f.maxEv)){hit={t:q[4],v:q[3],dist,y:q[1],hx:q[0]};break}}
+  if(!air){ // v454: second opinion from the crossing-the-line model (see its own comment) -- grounders only, same as the comment there explains
+   const cm=crossLineMargin(f,pts||trk,FP.vF,ACCEL_T,FP.react);
+   if(cm){
+    if(cm.mg<margin){margin=cm.mg;mv=cm.v}
+    if(cm.mg<=0&&!(f.maxEv&&H.ev>f.maxEv)&&(!hit||cm.t<hit.t))hit={t:cm.t,v:cm.v,dist:cm.dist,y:cm.y,hx:cm.hx};
+   }
+  }
   f.margin=margin;f.mv=mv;f.dl=dl;f.late=hit&&hit.t>dl?hit.t-dl:0;
   if(hit&&(air||hit.t<=dl)&&(!best||hit.t<best.t))best={f,...hit}}
  return best}
@@ -4298,7 +4338,13 @@ function ofTest(line){ // can an outfielder get to a low ball before it reaches 
  // drawn on the field, f.r0+.6) is an easy stop in stride regardless of how much EXTRA margin the run-credit math happens to show. See endHit()'s
  // `stationClose` use of this, below -- driven by a case where the user watched the ball visibly roll through the middle of the drawn circle and it
  // still came back as "ran it down but didn't have time," which didn't square with what was on screen.
- for(const f of OFD){let bm=1e9,bd=1e9;for(const q of trk){if(q[1]>1.3)continue;const dist=Math.hypot(q[0]-f.x,q[2]-f.z),vf=Math.max(.3,Math.min(1,1-(H.ev-FP.vSoft)/(FP.vHard-FP.vSoft))),run=rampDist(Math.max(0,q[4]-OFP.react),OFP.vF,ACCEL_T)*vf,R=f.r0*vf+run,mg=dist-R;if(mg<bm){bm=mg;bd=dist}}byF.set(f,{mg:bm,dist:bd})} // v446: accel-ramped, see ACCEL_T
+ for(const f of OFD){let bm=1e9,bd=1e9;for(const q of trk){if(q[1]>1.3)continue;const dist=Math.hypot(q[0]-f.x,q[2]-f.z),vf=Math.max(.3,Math.min(1,1-(H.ev-FP.vSoft)/(FP.vHard-FP.vSoft))),run=rampDist(Math.max(0,q[4]-OFP.react),OFP.vF,ACCEL_T)*vf,R=f.r0*vf+run,mg=dist-R;if(mg<bm){bm=mg;bd=dist}} // v446: accel-ramped, see ACCEL_T
+  // v454: second opinion from the crossing-the-line model (see its own comment) -- unlike the scan just above, this one prices reach off the
+  // ball's actual decayed speed at the crossing instant instead of the fixed H.ev used everywhere else in this function, so a liner that's
+  // already touched down and bled off speed before it's level with this outfielder reads as genuinely easier than the scan above gives it credit for.
+  const cm=crossLineMargin(f,trk,OFP.vF,ACCEL_T,OFP.react);
+  if(cm&&cm.mg<bm){bm=cm.mg;bd=cm.dist}
+  byF.set(f,{mg:bm,dist:bd})}
  let best=null;for(const f of OFD){const v=byF.get(f);if(v.mg<=0&&(!best||v.mg<best.mg))best={f,...v}}
  if(!best)return null;
  const cf=OFD[1],cfV=byF.get(cf); // OFD=[LF,CF,RF]
@@ -4389,7 +4435,13 @@ function endHit(){
    else if(fd){m='GROUND OUT';outFd=fd}
    else m='SINGLE';                                                         // through the infield = a single; only a ball that reaches the wall (gap or down a line) is a double
   }else{ // air balls
-   const popCut=FP.infield; // a true pop-up/fly (not a line drive -- those keep their own speed-sensitive catch physics below) that comes down this
+   // v454: popCut used to be a flat FP.infield (16m) no matter how long the ball hung -- the ground-ball version of this same "never got out of
+   // the infield" floor already widens for weak contact (see infieldCut/soft above), but the fly-ball one had no such allowance at all, despite
+   // hang time mattering even MORE for a popup than for a grounder: a towering, lazy popup gives a converging infielder real extra time to get
+   // under it even if it drifts a couple metres past the flat line. hangEase scales 0 at a routine, short 1.3s hang (no special credit) up to full
+   // credit by 2.0s (a genuinely lazy, high popup) -- bounded to the same max width the ground-ball floor already allows (FP.infield+6), so a
+   // towering popup never gets MORE auto-out radius than a weakly-topped grounder already does.
+   const hangEase=Math.max(0,Math.min(1,(first.t-1.3)/.7)),popCut=FP.infield+6*hangEase; // a true pop-up/fly (not a line drive -- those keep their own speed-sensitive catch physics below) that comes down this
     // close in is always run down by an infielder or the pitcher/catcher charging, regardless of what the outfielder-reach math (ac/airCatch) says --
     // that math is tuned for outfielders tracking a ball down and has no business ruling on anything landing this shallow
    if(k==='fly ball'&&first.d<popCut){m=first.peak>=8&&first.d<14?'POP OUT':'FLY OUT';fnote=`never got out of the infield (landed ${first.d.toFixed(0)} m out) - routine out`}
