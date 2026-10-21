@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v430'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v432'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4363,7 +4363,13 @@ function endHit(){
     const hard=H.ev>=FP.vSoft,
      holeThird=!!(outFd&&outFd.f.n==='SS'&&outFd.hx!==undefined&&outFd.hx<outFd.f.x),
      fName=outFd?outFd.f.n:(k==='ground ball'?(first.p.x>0.5?'1B':first.p.x<-0.5?'SS':'P'):null); // no specific fielder credited (the "never got out of the infield, a fielder charges it" dribbler) -- fall back to a synthetic side purely from where it died, same 1B/2B(right)-vs-P/SS(left) split the real fielder names already map onto in advSide()
-    const r=resolveAdvancedBaserunning(k,outs-1,fName,holeThird,hard); // outs-1: outsBefore (outs already reflects THIS play's own batter-out from the line just above)
+    // v432: pass m-derived ground/air, not the raw k classification -- a line drive that already bounced before being fielded (the
+    // fdGround branch above) still gets labeled m='GROUND OUT' (that's genuinely what happened: an infielder picked up a ball already
+    // on the ground, not a catch), but k itself stays 'line drive' since that's the ORIGINAL flight shape. resolveAdvancedBaserunning's
+    // own air/ground fork only ever looks at this one argument, so passing the raw k through let that already-bounced ball get resolved
+    // as a tag-up/no-tag fly-ball scenario ("no tag, runner holds") despite the result reading GROUND OUT to the player -- a flyout rule
+    // on a play that was never a catch. m is the one place that's already correctly settled ground-vs-air regardless of original k.
+    const r=resolveAdvancedBaserunning(m==='GROUND OUT'?'ground ball':k,outs-1,fName,holeThird,hard); // outs-1: outsBefore (outs already reflects THIS play's own batter-out from the line just above)
     outs+=r.outs;
     // v428: r.outs>=1 out of this resolver only ever means a double play (it's the only way this function ever adds an extra out) --
     // that's the actual outcome of the play, not an incidental baserunner consequence of a plain groundout/lineout, so it belongs as the
@@ -4372,7 +4378,13 @@ function endHit(){
     // doesn't just repeat the headline, and leave advN empty when there's nothing left to say (the plain 1st-only DP case).
     if(r.outs>=1)m='DOUBLE PLAY';
     if(r.note){
-     const noteText=r.outs>=1?r.note.replace(/^double play,?\s*/,''):r.note;
+     let noteText=r.outs>=1?r.note.replace(/^double play,?\s*/,''):r.note;
+     // v431: 'runner to 3rd' (the 1st+2nd double play's old r2, advancing uncontested) is the only non-empty note that can still come out of this
+     // when outs reaches 3 on this very play -- it's purely where he ended up, not a run, and the half-inning is about to clear the bases anyway
+     // (see inningFlipPreview() in say()), so by the time the player reads it that position means nothing; the base visualization already shows
+     // him stranded there. A run-related note ("run doesn't count") stays -- that one explains why the score didn't change despite the action,
+     // which is still worth saying even with the inning ending.
+     if(outs>=3&&noteText==='runner to 3rd')noteText='';
      if(noteText)advN=noteText.charAt(0).toUpperCase()+noteText.slice(1);
     }
     updBases();
