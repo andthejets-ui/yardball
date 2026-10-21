@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v451'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v452'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4237,10 +4237,19 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
     // get around the 1B or 3B bag should get through": a corner infielder ranging that direction is fighting the bag itself, not just distance, so
     // this gets the same style of penalty as holePenalty (same shape/coefficients) but scaled over the much tighter LINE_W instead of HOLE_W.
     lineSide=(f.n==='3B'&&first.p.x<f.x)||(f.n==='1B'&&first.p.x>f.x),lineFrac=lineSide?Math.max(0,Math.min(1,Math.abs(first.p.x-f.x)/LINE_W)):0,linePenalty=lineSide?(.42+.6*lineFrac)*(1-vf):0,
+    // v452: a ball ripped down the line at/near max lineFrac was still occasionally ruled an out purely because the fielder's own station happened
+    // to sit geometrically close to its path -- the margin math has no notion that "close to his spot" isn't the same as "he had a read on it".
+    // The user's refinement: it's the ball's RUNWAY (how much ground it covered in front of him before first touching down -- already computed
+    // above) that actually decides whether this is a tough, essentially unplayable ball, not his raw distance to it. A ball that lands well
+    // BEFORE reaching his depth (real runway) gives him time to see it coming and react even along the line, so it still goes through the normal
+    // formula below. One that doesn't land until it's already at/past his own depth (runway<=0, exactly the "lands first right near 3rd/1st"
+    // case) gets going too fast for him to have had any real read on it, however close his station happens to be -- that's an override, not
+    // another multiplier: it zeroes his reach outright rather than just trimming it further, so this fielder simply isn't a candidate on it.
+    lineOverride=lineSide&&lineFrac>=.9&&runway<=0,
     // offStationPenalty is the lighter, universal "ranging any direction" discount for balls that aren't toward either named hole/line -- a ball
     // already covered by holePenalty or linePenalty doesn't also need this lighter one stacked on top.
     offStationFrac=Math.min(1,Math.abs(first.p.x-f.x)/HOLE_W),offStationPenalty=(holeSide||lineSide)?0:.15*offStationFrac*(1-vf);
-   const R=Math.max(0,f.r0*vf+run-FP.reachBuf-holePenalty-linePenalty-offStationPenalty),mg=dist-R; // reachBuf trims a flat sliver off reach so razor-thin (1-5cm) plays swing to hits -- see FP.reachBuf comment above
+   const R=lineOverride?0:Math.max(0,f.r0*vf+run-FP.reachBuf-holePenalty-linePenalty-offStationPenalty),mg=dist-R; // reachBuf trims a flat sliver off reach so razor-thin (1-5cm) plays swing to hits -- see FP.reachBuf comment above
    if(mg<margin){margin=mg;mv=q[3]}
    if(mg<=0&&!(f.maxEv&&H.ev>f.maxEv)){hit={t:q[4],v:q[3],dist,y:q[1],hx:q[0]};break}}
   f.margin=margin;f.mv=mv;f.dl=dl;f.late=hit&&hit.t>dl?hit.t-dl:0;
