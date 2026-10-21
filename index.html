@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v432'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v433'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4164,7 +4164,11 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
    // or still doesn't open the middle enough. holeFrac scales the penalty by how far past his own station the ball actually is, as a fraction of the
    // full 3B-SS gap (HOLE_W): 0 right at his own position (still the original, tighter coin-flip-only behavior), ramping up to a much bigger trim by the
    // time it's landed in the true middle of the hole (or beyond, toward SS), where a hard-hit ball should now get through nearly automatically.
-   const holeSide=f.n==='3B'&&q[0]>f.x,holeFrac=holeSide?Math.max(0,Math.min(1,(q[0]-f.x)/HOLE_W)):0,holePenalty=holeSide?(.35+.5*holeFrac)*(1-vf):0;
+   // v433: 1B now gets the exact same treatment, mirrored -- a corner infielder ranging toward the MIDDLE hole on his glove side (1B toward 2B,
+   // same as 3B toward SS) is just as out-of-position on a hard-hit ball as 3B already was; there was never a baseball reason this only applied
+   // to one corner. The field is built symmetrically (1B.x===-3B.x, and 2B/SS are mirrored the same way), so the same HOLE_W already measured
+   // off 3B/SS applies unchanged to 1B/2B.
+   const holeSide=(f.n==='3B'&&q[0]>f.x)||(f.n==='1B'&&q[0]<f.x),holeFrac=holeSide?Math.max(0,Math.min(1,Math.abs(q[0]-f.x)/HOLE_W)):0,holePenalty=holeSide?(.35+.5*holeFrac)*(1-vf):0;
    const R=Math.max(0,f.r0*vf+run-FP.reachBuf-holePenalty),mg=dist-R; // reachBuf trims a flat sliver off reach so razor-thin (1-5cm) plays swing to hits -- see FP.reachBuf comment above
    if(mg<margin){margin=mg;mv=q[3]}
    if(mg<=0&&!(f.maxEv&&H.ev>f.maxEv)){hit={t:q[4],v:q[3],dist,y:q[1],hx:q[0]};break}}
@@ -4326,13 +4330,16 @@ function endHit(){
     // a routine single just because it looked playable at the moment it touched down. Only lock in SINGLE for `shallow` when it DOESN'T go on to
     // reach the fence -- if it does, let it fall through to the normal (corner-gated) double/triple call below, which the ofTest() capping right
     // after this still has the final say on if he actually runs it down while it's rolling.
-    // atHim is different and stays an unconditional single regardless -- it means the ball touched down within a few metres of the fielder's own
-    // station, which in real terms is an immediate scoop, not a footrace. ofTest() (the capping check right after this) has no way to credit that:
-    // it only measures whether his run speed can out-chase the ball's OWN rolling speed from a standing start, so a ball that lands right on top
-    // of him but then keeps rolling toward the fence under its own momentum (faster than his modeled run speed) reads as uncaught even though a
-    // real fielder standing right there would've already had it in his glove before it ever got rolling that far.
+    // atHim used to be unconditional regardless of reaching the wall -- the reasoning was that landing within a few metres of the fielder's own
+    // station is an immediate scoop, not a footrace, and ofTest()'s capping right after this has no way to credit that (it only measures whether
+    // his run speed can out-chase the ball's OWN rolling speed from a standing start). v433: that reasoning doesn't hold once the ball actually
+    // DOES reach the wall anyway -- "right at him, he plays it on a hop" but the ball still carries all the way to the fence means it was never
+    // really an easy scoop, it just grazed his own depth on the way through. Gated the same way `shallow` already is: lock in SINGLE only when it
+    // doesn't go on to reach the wall; if it does, fall through to the corner-gated double/triple call and let the ofTest() capping right after
+    // this decide for real whether he actually ran it down (comfortably -> single, bare scramble -> one base of credit, not caught at all -> the
+    // full double/triple stands).
     const reachedWall=crossed&&!crossed.air&&!crossed.high;
-    m=(shallow&&!reachedWall)||atHim?'SINGLE':(first.d>=29.5&&corner)?'TRIPLE':'DOUBLE';
+    m=(shallow||atHim)&&!reachedWall?'SINGLE':(first.d>=29.5&&corner)?'TRIPLE':'DOUBLE';
     fnote=`${k}, in the air ${first.t.toFixed(1)} s, landed ${od.toFixed(1)} m from ${o.n} (${shallow?'in front of him':atHim?'right at him, he plays it on a hop':over?'over his head':'in the gap'}); nobody close enough to catch it`;
     // Not caught in the air, but if the ball's post-bounce roll still reaches the fence, a fielder who actually ran it down while it was rolling can
     // cut off the extra base(s) the depth call above assumed nobody could prevent -- same idea as an outfielder running down a ball in the gap before
