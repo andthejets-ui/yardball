@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v456'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v457'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4211,6 +4211,28 @@ function crossLineMargin(f,pts,vFConst,accelT,reactT){
  }
  return null;
 }
+// v457: holeSide/lineSide (and the hole%/line% readout in fieldNote) both used first.p.x -- where the ball FIRST touched down -- as their only
+// reference point. That's the right call for holeSide (v441's own reasoning still holds: a hard-hit ball placed mid-hole shouldn't lose credit
+// for wherever it happens to bounce afterward), but it broke down on a specific, now twice-reported pattern: a weakly-topped ball that lands
+// shallow, near home (first.p.x close to 0, reading as deep in the OPPOSITE hole purely because it's nowhere near the corner's own station yet)
+// and then tails/rolls out toward that corner's own foul line over the rest of its roll via spin -- a real, late-developing direction of travel,
+// not an artifact of an incidental bounce. The user's own report: a ball described as landing "about 1 foot just fair" down the 1B line was
+// read by the game as "100% of the way across the 1B/2B hole," because its first touchdown (2m out, basically up the middle) had nothing to do
+// with where it ultimately tracked. lineApproachX finds whichever point along the ball's whole path got closest to THIS corner's own foul line
+// (restricted to his own side of the field, so a ball that crosses to the other side first doesn't get credited there) and uses that point's x
+// for lineSide/lineFrac/lineOverride and the line% readout instead -- holeSide/holeFrac/holePenalty and the hole% readout keep first.p.x,
+// unchanged. A ball whose closest approach to the line IS its first touchdown (most balls) sees no change at all.
+function lineApproachX(f,pts){
+ if(f.n!=='1B'&&f.n!=='3B')return first.p.x; // only the two corners have a foul-line side to begin with
+ const side=f.n==='1B'?1:-1; // +1: foul line is x=-z (positive-x side). -1: foul line is x=z (negative-x side).
+ let bestX=first.p.x,bestD=Math.abs(-first.p.z-side*first.p.x); // distance to that corner's own foul line (abs: a point that's already drifted PAST the line, into foul territory, isn't "closer" just because the raw signed value went negative)
+ for(const q of pts){
+  if(side*q[0]<0)continue; // stay on this corner's own side of the field -- a ball that crosses the plate's centerline isn't tracking toward HIS line
+  const d=Math.abs(-q[2]-side*q[0]);
+  if(d<bestD-1e-9){bestD=d;bestX=q[0]}
+ }
+ return bestX;
+}
 function fieldTest(air,pts){let best=null; // air = line drive: caught only if it passes right at the glove before it bounces. pts: optional subset of trk to search instead of the whole thing (used to re-run the normal, run-credit grounder check over just the AFTER-it-bounced portion of a line drive's track -- see the call site in endHit())
  for(const f of FLD){let margin=1e9,hit=null,mv=0,prevDist=null; // prevDist: tracks whether the ball is closing on THIS fielder or curving away from him, point to point (see movingAway below)
   // Deadline grace: this whole sim gives the defense credit it hasn't really earned on anything that needs a dive, an off-balance/jump throw, or
@@ -4221,6 +4243,7 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
   // Scales 0 (hard-hit, H.ev at or above vHard) to DEADLINE_GRACE seconds (soft contact, H.ev at or below vSoft).
   const soft=Math.max(0,Math.min(1,(FP.vHard-H.ev)/(FP.vHard-FP.vSoft))),DEADLINE_GRACE=.12;
   const dl=FP.tBat-(f.n==='1B'?.4:FP.rel+Math.hypot(f.x-B1[0],f.z-B1[1])/FP.vThrow)+DEADLINE_GRACE*soft; // latest he can get to the ball and still beat the batter
+  const lineX=lineApproachX(f,pts||trk); // v457: see lineApproachX's own comment -- used ONLY for lineSide/lineFrac/lineOverride below, not holeSide
   for(const q of(pts||trk)){if(q[1]>FP.reachY)continue;if(air&&q[4]>first.t)break;
    const __distToF=Math.hypot(q[0]-f.x,q[2]-f.z),movingAway=prevDist!==null&&__distToF>prevDist;prevDist=__distToF; // a ball hooking away from this fielder (e.g. a pull hit curving around the 3B bag, or an oppo shot bending toward the 1B line) is moving out of his range as time passes --
    // crediting him run-speed*elapsed-time reach on top of that double-counts in his favor (he's not closing a gap, the gap's growing even as he runs), so no run credit on a point where the ball's getting farther from him, only his flat-footed glove reach.
@@ -4279,7 +4302,7 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
     // v443: lineSide is the mirror image of holeSide -- toward the foul line / his own bag, instead of toward the other middle infielder. "Balls that
     // get around the 1B or 3B bag should get through": a corner infielder ranging that direction is fighting the bag itself, not just distance, so
     // this gets the same style of penalty as holePenalty (same shape/coefficients) but scaled over the much tighter LINE_W instead of HOLE_W.
-    lineSide=(f.n==='3B'&&first.p.x<f.x)||(f.n==='1B'&&first.p.x>f.x),lineFrac=lineSide?Math.max(0,Math.min(1,Math.abs(first.p.x-f.x)/LINE_W)):0,linePenalty=lineSide?(.42+.6*lineFrac)*(1-vf):0,
+    lineSide=(f.n==='3B'&&lineX<f.x)||(f.n==='1B'&&lineX>f.x),lineFrac=lineSide?Math.max(0,Math.min(1,Math.abs(lineX-f.x)/LINE_W)):0,linePenalty=lineSide?(.42+.6*lineFrac)*(1-vf):0,
     // v452: a ball ripped down the line at/near max lineFrac was still occasionally ruled an out purely because the fielder's own station happened
     // to sit geometrically close to its path -- the margin math has no notion that "close to his spot" isn't the same as "he had a read on it".
     // The user's refinement: it's the ball's RUNWAY (how much ground it covered in front of him before first touching down -- already computed
@@ -4316,9 +4339,14 @@ function fieldNote(fd){if(fd){
  // still read as the mid-hole shot it was, not wherever he happened to catch up to it. Also extended to 1B's own hole (toward 2B), which got the
  // same penalty back in v433 but never got this readout -- it only ever checked for 3B.
  const onHoleSide=(fd.f.n==='3B'&&first.p.x>fd.f.x)||(fd.f.n==='1B'&&first.p.x<fd.f.x);
- const onLineSide=(fd.f.n==='3B'&&first.p.x<fd.f.x)||(fd.f.n==='1B'&&first.p.x>fd.f.x); // v443: same readout for the new line-side penalty (see linePenalty) -- a hole% reader with no line% equivalent made it look like only the SS-side gap ever mattered.
+ // v457: the line% readout used to share first.p.x with the hole% one above -- see lineApproachX's own comment. A ball that first touches down
+ // shallow near home then tails out toward the corner's own foul line over its roll could read as deep in the OPPOSITE hole here even while the
+ // user watched it track right down the line, because first.p.x has no notion of where the ball drifted to afterward. lineX is whichever point
+ // along the ball's whole path actually got closest to that corner's own line.
+ const lineX=lineApproachX(fd.f,trk);
+ const onLineSide=(fd.f.n==='3B'&&lineX<fd.f.x)||(fd.f.n==='1B'&&lineX>fd.f.x); // v443: same readout for the new line-side penalty (see linePenalty) -- a hole% reader with no line% equivalent made it look like only the SS-side gap ever mattered.
  const hole=onHoleSide?`, ${Math.round(Math.min(100,Math.max(0,Math.abs(first.p.x-fd.f.x)/HOLE_W*100)))}% of the way across the ${fd.f.n==='3B'?'3B/SS':'1B/2B'} hole`
-  :onLineSide?`, ${Math.round(Math.min(100,Math.max(0,Math.abs(first.p.x-fd.f.x)/LINE_W*100)))}% of the way around the ${fd.f.n} bag`:'';
+  :onLineSide?`, ${Math.round(Math.min(100,Math.max(0,Math.abs(lineX-fd.f.x)/LINE_W*100)))}% of the way around the ${fd.f.n} bag`:'';
  return `${fd.f.n} fielded it ${fd.dist.toFixed(1)} m from his own position${hole}, at ${fd.t.toFixed(1)} s, ${fd.y.toFixed(2)} m off the ground, and threw him out (ball passed ${Math.abs(fd.f.margin).toFixed(2)} m inside his reach)`} // margin (dist-R at closest approach) was already computed every play but never shown on an OUT -- only ever surfaced on a miss ("missed it by X m", below). Added so a close, hard-hit grounder like a 3B/SS play up the middle shows exactly how much room there was, not just that it was an out. v280: fd.dist (how far from his own station, e.g. 2B's spot between 1B and 2nd, not dead center) was already computed by fieldTest() but never surfaced -- added so "up the middle, he had to range for it" vs. "basically right at him" stops being a judgment call and becomes a number, same idea as the outfield's "landed X m from CF" readout.
  const l=FLD.filter(f=>f.late>0).sort((x,y)=>x.late-y.late)[0];if(l)return `${l.n} got there ${l.late.toFixed(2)} s too late to get the batter`;
  let nf=null;for(const f of FLD)if(!nf||f.margin<nf.margin)nf=f;return nf&&nf.margin<1e8?`nearest fielder ${nf.n} missed it by ${Math.max(0,nf.margin).toFixed(1)} m`:''}
