@@ -479,7 +479,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v435'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v436'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -653,10 +653,10 @@ function advanceWalk(){const r1=base1,r2=base2,r3=base3;let runs=0;if(r1){if(r2)
 // 1st-base runner at 2nd regardless of side (not enough to stretch even to the "long throw" side).
 function resolveAdvancedSingle(sideRight,shallow){
  const r1=base1,r2=base2,r3=base3;let runs=0,note='';
- if(r3){base3=false;runs++} // 3rd always scores on any single, any depth -- he's already too close to home for a shallow one to matter; identical to Basic's own behavior, so never worth a note on its own
+ if(r3){base3=false;runs++} // 3rd always scores on any single, any depth -- he's already too close to home for a shallow one to matter; identical to Basic's own behavior, so never worth a note on its own WHEN HE'S THE ONLY RUNNER (r3 still holds the original occupancy below, since this only mutates the global base3, not this local const -- used to fold his run into the r2 note so it's never silently dropped)
  if(r2){
-  if(shallow){base2=false;base3=true;note='runner advances to 3rd'} // same end state Basic already gives a 2nd-base runner on ANY single -- only worth a note so the player sees Advanced deliberately chose this, not that nothing ran. v429: was "checks the runner, holds at 3rd" -- read as if he started the play ON 3rd, when he actually started on 2nd and moved up; "advances to 3rd" describes what actually happened instead
-  else{base2=false;runs++;note='runner scores from 2nd'}
+  if(shallow){base2=false;base3=true;note=r3?'runner scores from 3rd, 2nd advances to 3rd':'runner advances to 3rd'} // same end state Basic already gives a 2nd-base runner on ANY single -- only worth a note so the player sees Advanced deliberately chose this, not that nothing ran. v429: was "checks the runner, holds at 3rd" -- read as if he started the play ON 3rd, when he actually started on 2nd and moved up; "advances to 3rd" describes what actually happened instead
+  else{base2=false;runs++;note=r3?'both runners score':'runner scores from 2nd'} // v436: a runner on 3rd always scores too (see the r3 block above) -- used to go completely unmentioned here, so "Runner scores from 2nd" silently undersold a 2-run single as if only one run came in
  }
  if(r1){
   base1=false;
@@ -665,6 +665,21 @@ function resolveAdvancedSingle(sideRight,shallow){
  }
  base1=true;bankRuns(runs);
  return{runs,note};
+}
+// v436: doubles/triples/homers never got any run-scoring narration at all, in either Basic or Advanced -- a double that drove in a runner from
+// 2nd just showed "DOUBLE" with nothing underneath, the same as one with the bases empty. This isn't an Advanced baserunning DECISION the way
+// singles' side/depth calls are -- who scores on an extra-base hit is fully determined by occupancy and bases reached, identical in Basic and
+// Advanced -- it's purely narration of something that was already happening silently. Mirrors advanceRunners()'s own who-scores math exactly
+// (r1/r2/r3 = occupancy BEFORE the play, n = bases the batter reaches) rather than recomputing it, so this can never drift out of sync with
+// what actually scored. Call sites capture r1/r2/r3 before calling advanceRunners() (which mutates them) and gate this behind advBase, same as
+// every other Advanced note -- kept out of Basic for now per the same reasoning the singles/outs notes already follow.
+function describeRunsOnHit(n,r1,r2,r3){
+ if(n>=4){const c=(r1?1:0)+(r2?1:0)+(r3?1:0);return c?(c===1?'runner scores':`all ${c} runners score`):''}
+ const scored=[];if(r3)scored.push('3rd');if(r2&&2+n>=4)scored.push('2nd');if(r1&&1+n>=4)scored.push('1st');
+ if(!scored.length)return'';
+ if(scored.length===1)return`runner scores from ${scored[0]}`;
+ if(scored.length===2)return`runners score from ${scored[0]} and ${scored[1]}`;
+ return'all 3 runners score';
 }
 function updBases(){$('b1').classList.toggle('on',base1);$('b2').classList.toggle('on',base2);$('b3').classList.toggle('on',base3)}
 // v426: "Advanced" baserunning on batted-ball OUTS. Basic (the ~15 lines above, unchanged) is what the game always did until now: any
@@ -4265,6 +4280,7 @@ function endHit(){
   else if(!crossed.air&&crossed.high){m='GROUND RULE DOUBLE'}           // bounced over the fence
   else if(crossed.air)m='DOUBLE (off the wall)';                       // hit the boards on the fly
   else m='DOUBLE';                                                     // landed, then rolled / bounced into the fence
+  if(advBase){const note=describeRunsOnHit(hitBases(m),base1,base2,base3);if(note)advN=note.charAt(0).toUpperCase()+note.slice(1)}
   advanceRunners(hitBases(m));hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;S=B=0;
   if(checkWalkoff(preRed,preBlue)){walkoffPending=true;m='WALKOFF '+m}}
  else{
@@ -4414,7 +4430,10 @@ function endHit(){
   }
   else{
    if(advBase&&m==='SINGLE'){const rs=resolveAdvancedSingle(first.p.x>0,first.d<20);if(rs.note)advN=rs.note.charAt(0).toUpperCase()+rs.note.slice(1)}
-   else advanceRunners(hitBases(m));
+   else{
+    if(advBase){const note=describeRunsOnHit(hitBases(m),base1,base2,base3);if(note)advN=note.charAt(0).toUpperCase()+note.slice(1)}
+    advanceRunners(hitBases(m));
+   }
    hits++;if(battingTeam==='red')hitsRed++;else hitsBlue++;col='#9cff9c';
    // v295: walk-off check -- see checkWalkoff()'s own declaration for what it tests. preRed/preBlue are captured once, above, before fairDec's
    // whole if/else-if/else chain, so this is covered no matter which branch resolves the hit (this one, or the wall-reaching one above it).
