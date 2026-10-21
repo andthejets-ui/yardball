@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v457'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v458'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4198,7 +4198,14 @@ function crossLineMargin(f,pts,vFConst,accelT,reactT){
   const fwd=q[0]*ux+q[2]*uz; // how far along the fielder's own bearing this point is -- the ball's "depth" measured on his line, not home's.
   if(prev){
    const pfwd=prev[0]*ux+prev[2]*uz;
-   if(pfwd<stationDepth&&fwd>=stationDepth){ // the ball's depth-on-his-line just crossed his own station depth between these two samples
+   // v458: this used to accept a crossing anywhere in the ball's path, including well before it ever touched down -- a ball whose first
+   // touchdown is DEEPER than this fielder's own station (a liner/topped shot that's still airborne when it passes his depth) could cross his
+   // depth-line while still a couple feet up and moving fast, read as a close, comfortable stop purely off that in-flight lateral gap, even
+   // though the real ball keeps going and doesn't land until well past him. Fielding a still-descending ball before it's bounced is a dive/
+   // line-drive read, not the "read the roll, cut it off" play this whole grounder model is built around -- and missing it isn't a routine
+   // single, it's a ball that sails on past for extra bases, which none of this prices in either. Gated to only accept a crossing at or after
+   // the ball's actual first touchdown, so this only ever evaluates the ball once it's genuinely on the ground and rolling.
+   if(pfwd<stationDepth&&fwd>=stationDepth&&q[4]>=first.t-1e-9){ // the ball's depth-on-his-line just crossed his own station depth between these two samples, and it's already on the ground by then
     const frac=Math.max(0,Math.min(1,(stationDepth-pfwd)/((fwd-pfwd)||1e-9)));
     const t=prev[4]+(q[4]-prev[4])*frac,y=prev[1]+(q[1]-prev[1])*frac;
     const xAt=prev[0]+(q[0]-prev[0])*frac,zAt=prev[2]+(q[2]-prev[2])*frac,lat=xAt*px+zAt*pz; // lat: signed lateral offset from his bearing line at the crossing instant -- 0 means it crosses right through his own spot
