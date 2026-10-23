@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v460'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v462'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1137,11 +1137,15 @@ const KIDBAT_LEFT_GRIP_IK=true;
 // Target grip point, expressed in the BAT's OWN local space (batG/batT), not world space -- so it stays correct no matter where/how the bat
 // itself is currently positioned. Local +X runs UP the bat toward the barrel (confirmed from the handle geometry: the Lathe profile's length
 // runs from knob at local x=-0.14 to tip at x=1.2, see `bg`'s own construction a few hundred lines down) -- so a NEGATIVE x nudges the target
-// down toward the knob, away from the current (x~0) grip point. The y/z components are a first guess at "the opposite side of the handle" from
-// the right hand (the handle's circular cross-section lives in the local Y-Z plane after that same rotateZ) -- genuinely can't verify which of
-// Y or Z reads as correct without a live render (this sandbox's CDN is blocked, so no screenshot testing was possible here -- see this
-// session's own notes). Needs tuning from an actual in-game screenshot; start conservative.
-const KIDBAT_IK_TARGET_LOCAL=new THREE.Vector3(-0.06,0.03,0);
+// down toward the knob, away from the current (x~0) grip point. The y/z components aim for "the opposite side of the handle" from the right
+// hand (the handle's circular cross-section lives in the local Y-Z plane after that same rotateZ). v461, round 2 off a live screenshot: the
+// first pass's position barely read as moved, and the user specifically wants it moved toward the pitcher side -- switched the perpendicular
+// offset from Y to Z. v462, off another screenshot: the hand is now crashing through the handle rather than sitting beside it -- the handle's
+// own radius near this grip point (x around -0.09, so between the lathe profile's x=-0.07 and x=-0.02 points) is only ~0.018-0.02, so a 0.05
+// radial offset barely clears the bat's surface at all before accounting for the hand mesh's own thickness. Bumped further down the handle and
+// noticeably further off-axis so there's real clearance; still a guess pending a screenshot (this sandbox's CDN is blocked, no live render
+// possible here) -- if it now reads as too far off the handle rather than clipping through it, that's the easier direction to correct from.
+const KIDBAT_IK_TARGET_LOCAL=new THREE.Vector3(-0.11,0,0.09);
 let kidBatShoulderBoneL=null,kidBatArmBoneL=null,kidBatForeArmBoneL=null;
 // Standard analytic 2-bone IK (shoulder pivot, elbow, hand target), solved via the law of cosines. Deliberately does NOT touch the hand/wrist
 // bone's own rotation -- only repositions the upper arm + forearm so the hand reaches the target point; the hand keeps whatever rotation the
@@ -1157,6 +1161,13 @@ function kidBatSetBoneWorldDir(bone,worldDir){
 }
 function applyKidBatLeftGripIK(){
  if(!KIDBAT_LEFT_GRIP_IK||!kidBatReady||!kidBat)return;
+ // v461: a first live test showed this badly distorting the arm mid-swing (ball already released, bat sweeping through its arc) -- because the
+ // active swing (kidBatPhase===2, before contact) doesn't use hand-tracking at all, it follows a separate, already-well-tuned procedural arc
+ // instead (see the big hand-tracking/procedural block above), so running this IK there every frame fights that baked/procedural arm motion in
+ // real time as the target sweeps fast through space, producing the contorted "weird shoulder rotation." Scoped down to ONLY idle (phase 0)
+ // and load/stride (phase 1) -- exactly the phases the actual complaint (overlapping hands) was about -- so the swing's own arm animation
+ // (and follow-through, left for a later pass) plays completely untouched, same as before this feature existed.
+ if(!(kidBatPhase===0||kidBatPhase===1))return;
  if(!kidBatShoulderBoneL)kidBatShoulderBoneL=kidBat.getObjectByName('mixamorigLeftShoulder');
  if(!kidBatArmBoneL)kidBatArmBoneL=kidBat.getObjectByName('mixamorigLeftArm');
  if(!kidBatForeArmBoneL)kidBatForeArmBoneL=kidBat.getObjectByName('mixamorigLeftForeArm');
@@ -1173,11 +1184,17 @@ function applyKidBatLeftGripIK(){
  const toTarget=target.clone().sub(shoulderPos);let d=toTarget.length();
  const maxReach=(L1+L2)*0.999,minReach=Math.max(0.001,Math.abs(L1-L2)*1.001);
  d=Math.max(minReach,Math.min(maxReach,d));toTarget.normalize();
- // pole/bend-plane reference: the CURRENT (pre-IK, baked-animation) elbow direction, projected perpendicular to the shoulder->target axis --
- // keeps the arm bending the same general way (forward/down) the existing animation already bends it, instead of an arbitrary or flipped plane.
- const curElbowDir=elbowPos.clone().sub(shoulderPos).normalize();
- let poleRef=curElbowDir.clone().sub(toTarget.clone().multiplyScalar(curElbowDir.dot(toTarget)));
- if(poleRef.lengthSq()<1e-6)poleRef.set(0,0,1); // degenerate (arm already pointing almost exactly at the target) -- arbitrary stable fallback
+ // pole/bend-plane reference: v462 -- this used to come from the CURRENT elbow bone's position, but that bone is one this function itself
+ // rewrites every frame it runs. A live test showed the arm working correctly for a while, then rotating wrong as the idle animation looped --
+ // exactly the signature of a feedback loop (this frame's solve partly depending on last frame's own output, compounding until it's visibly
+ // broken, worst right at a loop-reset discontinuity). Switched to the SHOULDER bone's own current world orientation instead -- a bone this
+ // function never writes to, driven purely by the baked clip -- so there is no path left for this function's own previous output to influence
+ // its next input. poleWorldAxis is a fixed axis in the shoulder's own local space (a guess at which local axis reads as "forward"; still
+ // needs live confirmation, same as the target offset does) rotated into world space by the shoulder's actual current orientation.
+ const shoulderWorldQ=new THREE.Quaternion();kidBatShoulderBoneL.getWorldQuaternion(shoulderWorldQ);
+ let poleRef=new THREE.Vector3(0,0,1).applyQuaternion(shoulderWorldQ);
+ poleRef.sub(toTarget.clone().multiplyScalar(poleRef.dot(toTarget)));
+ if(poleRef.lengthSq()<1e-6)poleRef.set(0,1,0); // degenerate fallback -- a different arbitrary axis than the one just tried, so it can't match toTarget twice in a row
  poleRef.normalize();
  const a=L1,b=L2,c=d;
  const shoulderAngle=Math.acos(Math.max(-1,Math.min(1,(a*a+c*c-b*b)/(2*a*c))));
@@ -1483,6 +1500,7 @@ function applyRosterLooks(reason){
   kidBat.position.copy(KIDBAT_HOME.pos);kidBat.rotation.y=KIDBAT_HOME.rotY;kidBat.scale.setScalar(KIDBAT_HOME.scale);
   kidPitcher.position.copy(KIDPITCH_HOME.pos);kidPitcher.rotation.y=KIDPITCH_HOME.rotY;kidPitcher.scale.setScalar(KIDPITCH_HOME.scale);
   kidBatHandBoneL=null;kidPitcherHandR=null; // invalidate the lazy hand-bone caches so the next lookup (`if(!kidBatHandBoneL)kidBatHandBoneL=kidBat.getObjectByName(...)`, used throughout) re-resolves against whichever object `kidBat`/`kidPitcher` now point to, instead of keeping the OLD object's bone reference
+  kidBatShoulderBoneL=kidBatArmBoneL=kidBatForeArmBoneL=null; // v462: the left-grip-IK bone caches need the exact same invalidation as kidBatHandBoneL above, and were missing it -- without this, after a roster swap `kidBat` correctly points at the new batter, but these three kept pointing at the PREVIOUS batter's arm bones (now that kid is out pitching), so the IK kept steering his arm while he pitched. This is almost certainly what the "pops the left hand while pitching" report was.
   kidBatAction.reset().play();kidBatAction.paused=true;kidBatAction.time=0;kidBatMixer.update(0);
   kidAction.reset().play();kidAction.paused=true;kidAction.time=0;kidMixer.update(0);
  }catch(e){console.log('roster swap failed:',e.message)} // if the two skeletons' bind poses/bone sets don't actually line up despite matching names, this is where it'll throw or silently render something warped
