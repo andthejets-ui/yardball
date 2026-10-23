@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v462'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v463'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -1138,14 +1138,12 @@ const KIDBAT_LEFT_GRIP_IK=true;
 // itself is currently positioned. Local +X runs UP the bat toward the barrel (confirmed from the handle geometry: the Lathe profile's length
 // runs from knob at local x=-0.14 to tip at x=1.2, see `bg`'s own construction a few hundred lines down) -- so a NEGATIVE x nudges the target
 // down toward the knob, away from the current (x~0) grip point. The y/z components aim for "the opposite side of the handle" from the right
-// hand (the handle's circular cross-section lives in the local Y-Z plane after that same rotateZ). v461, round 2 off a live screenshot: the
-// first pass's position barely read as moved, and the user specifically wants it moved toward the pitcher side -- switched the perpendicular
-// offset from Y to Z. v462, off another screenshot: the hand is now crashing through the handle rather than sitting beside it -- the handle's
-// own radius near this grip point (x around -0.09, so between the lathe profile's x=-0.07 and x=-0.02 points) is only ~0.018-0.02, so a 0.05
-// radial offset barely clears the bat's surface at all before accounting for the hand mesh's own thickness. Bumped further down the handle and
-// noticeably further off-axis so there's real clearance; still a guess pending a screenshot (this sandbox's CDN is blocked, no live render
-// possible here) -- if it now reads as too far off the handle rather than clipping through it, that's the easier direction to correct from.
-const KIDBAT_IK_TARGET_LOCAL=new THREE.Vector3(-0.11,0,0.09);
+// hand (the handle's circular cross-section lives in the local Y-Z plane after that same rotateZ). v461 switched the perpendicular offset from
+// Y to Z chasing a "barely moved" report; v462 pushed both further and was reported as WORSE -- moved too far down the handle, and onto the
+// wrong side. Walking X back down toward where it read as good before, and switching the radial offset back to Y (Y was only ever reported as
+// too small, never as the wrong side -- that complaint only appeared after switching to Z), with more magnitude than the first Y attempt had.
+// Still a guess pending a screenshot (this sandbox's CDN is blocked, no live render possible here).
+const KIDBAT_IK_TARGET_LOCAL=new THREE.Vector3(-0.07,0.08,0);
 let kidBatShoulderBoneL=null,kidBatArmBoneL=null,kidBatForeArmBoneL=null;
 // Standard analytic 2-bone IK (shoulder pivot, elbow, hand target), solved via the law of cosines. Deliberately does NOT touch the hand/wrist
 // bone's own rotation -- only repositions the upper arm + forearm so the hand reaches the target point; the hand keeps whatever rotation the
@@ -1184,17 +1182,18 @@ function applyKidBatLeftGripIK(){
  const toTarget=target.clone().sub(shoulderPos);let d=toTarget.length();
  const maxReach=(L1+L2)*0.999,minReach=Math.max(0.001,Math.abs(L1-L2)*1.001);
  d=Math.max(minReach,Math.min(maxReach,d));toTarget.normalize();
- // pole/bend-plane reference: v462 -- this used to come from the CURRENT elbow bone's position, but that bone is one this function itself
- // rewrites every frame it runs. A live test showed the arm working correctly for a while, then rotating wrong as the idle animation looped --
- // exactly the signature of a feedback loop (this frame's solve partly depending on last frame's own output, compounding until it's visibly
- // broken, worst right at a loop-reset discontinuity). Switched to the SHOULDER bone's own current world orientation instead -- a bone this
- // function never writes to, driven purely by the baked clip -- so there is no path left for this function's own previous output to influence
- // its next input. poleWorldAxis is a fixed axis in the shoulder's own local space (a guess at which local axis reads as "forward"; still
- // needs live confirmation, same as the target offset does) rotated into world space by the shoulder's actual current orientation.
- const shoulderWorldQ=new THREE.Quaternion();kidBatShoulderBoneL.getWorldQuaternion(shoulderWorldQ);
- let poleRef=new THREE.Vector3(0,0,1).applyQuaternion(shoulderWorldQ);
+ // pole/bend-plane reference: v462 round 1 switched this from the elbow bone's own position (self-referential -- this function rewrites that
+ // bone every frame) to the shoulder bone's current world orientation. That removed the self-reference but NOT the real bug: whatever vector
+ // feeds the projection-perpendicular-to-toTarget step, the moment it sweeps close to PARALLEL with toTarget, the projection collapses toward
+ // zero length and the code falls back to a totally different hardcoded direction -- a hard snap, not a smooth transition. If the chosen
+ // reference (the shoulder's own local axis) ever swings close to parallel with toTarget during the idle sway or stride, that snap fires
+ // repeatedly, which reads exactly as "circling." v462 round 2: use WORLD UP as the reference instead of anything bone-derived. A batting arm
+ // reaching out from the shoulder is essentially never pointing straight up or down, so this stays far from the degenerate zone through all of
+ // idle and load/stride, and it doesn't depend on any animated bone's orientation at all, removing the instability at its source rather than
+ // just relocating it.
+ let poleRef=new THREE.Vector3(0,1,0);
  poleRef.sub(toTarget.clone().multiplyScalar(poleRef.dot(toTarget)));
- if(poleRef.lengthSq()<1e-6)poleRef.set(0,1,0); // degenerate fallback -- a different arbitrary axis than the one just tried, so it can't match toTarget twice in a row
+ if(poleRef.lengthSq()<1e-6)poleRef.set(1,0,0); // degenerate fallback for the (essentially unreachable, for a human arm) case of toTarget itself pointing straight up/down
  poleRef.normalize();
  const a=L1,b=L2,c=d;
  const shoulderAngle=Math.acos(Math.max(-1,Math.min(1,(a*a+c*c-b*b)/(2*a*c))));
