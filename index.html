@@ -483,7 +483,7 @@ const C={ST:0.45,SW:0.22,CHECK:0.15,WIND:1.15,PX:-0.85,PZ:0.0,REACH:1.2,RS:0.12,
 // with triggering it) -- the actual "watch it a couple frames, THEN decide to hold up" use case this is supposed to support never had room to happen.
 // Bumped to 0.15s (~68% of the swing) so there's real time to react partway through. Still not the whole swing -- see CHECK_FLOOR below for how a
 // rushed load shrinks this further, and the point-of-no-return is still real, just further out now.
-const BUILD='v458'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
+const BUILD='v459'; // bumped by hand on every publish so pasted debug feedback can be matched to the exact build it came from -- shown in the debug breakdown
 $('verTag').textContent=BUILD; // v389: see #verTag's own CSS comment for why this is always shown, not gated behind Debug mode
 // v312: bypasses the mode-select (Local/Online) and side-select screens when false -- Press to Play goes straight into the swing tutorial, every
 // connected input controls the batter. v315: turned back ON now that online matchmaking is backed by a real Firestore project instead of the
@@ -4249,7 +4249,19 @@ function fieldTest(air,pts){let best=null; // air = line drive: caught only if i
   // hole penalty above already leans the other way for a well-placed hard-hit ball (there we trim the defense's reach; here we stretch his clock).
   // Scales 0 (hard-hit, H.ev at or above vHard) to DEADLINE_GRACE seconds (soft contact, H.ev at or below vSoft).
   const soft=Math.max(0,Math.min(1,(FP.vHard-H.ev)/(FP.vHard-FP.vSoft))),DEADLINE_GRACE=.12;
-  const dl=FP.tBat-(f.n==='1B'?.4:FP.rel+Math.hypot(f.x-B1[0],f.z-B1[1])/FP.vThrow)+DEADLINE_GRACE*soft; // latest he can get to the ball and still beat the batter
+  // v459: the grace above already gives weak contact (by raw exit velocity) some benefit of the doubt against the deadline -- but four reported
+  // plays (all weak-to-moderate contact, 41-54mph, all first-touching-down just 1-3m from home) showed the same shape: the fielder's own reach
+  // margin DID clear (fnote said "got there Xs too late," not a clean miss), just barely past this deadline (0.00-0.19s) -- while a comparable-
+  // exit-velocity ball that didn't touch down until 7m out read correctly as a clean single with no deadline issue at all. The user's own
+  // diagnosis: a ball that starts rolling almost immediately has that much MORE game-clock time to bleed speed to ground friction before it
+  // ever reaches a fielder's depth, on top of whatever its raw exit velocity already implies -- first.d (how early it touched down) is a real,
+  // separate signal from H.ev, not a restatement of it. earlyLandGrace is a second grace term on top of the exit-velocity one, scaled by how
+  // close to home the ball's first touchdown was: full at first.d=0, tapering to nothing by first.d=8m (a ball that carries that deep before
+  // ever bouncing hasn't earned the same extra head start). Comfortably flips the two razor-thin (0.00/0.01s) misses, narrows but doesn't force
+  // the one further-off (0.19s) case -- that one may need its own signal (how much speed the ball actually bled, not just how early it landed)
+  // if it turns out to recur; watching for more reports before pushing this further.
+  const earlyLandGrace=Math.max(0,Math.min(1,(8-first.d)/8))*.08;
+  const dl=FP.tBat-(f.n==='1B'?.4:FP.rel+Math.hypot(f.x-B1[0],f.z-B1[1])/FP.vThrow)+DEADLINE_GRACE*soft+earlyLandGrace; // latest he can get to the ball and still beat the batter
   const lineX=lineApproachX(f,pts||trk); // v457: see lineApproachX's own comment -- used ONLY for lineSide/lineFrac/lineOverride below, not holeSide
   for(const q of(pts||trk)){if(q[1]>FP.reachY)continue;if(air&&q[4]>first.t)break;
    const __distToF=Math.hypot(q[0]-f.x,q[2]-f.z),movingAway=prevDist!==null&&__distToF>prevDist;prevDist=__distToF; // a ball hooking away from this fielder (e.g. a pull hit curving around the 3B bag, or an oppo shot bending toward the 1B line) is moving out of his range as time passes --
